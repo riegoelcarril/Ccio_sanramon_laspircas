@@ -32,7 +32,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- OPTIMIZACIÓN: Cache de GeoJSON locales para evitar parpadeo ---
+# --- OPTIMIZACIÓN: Cache de GeoJSON locales ---
 @st.cache_data
 def obtener_geojson_local(ruta: str, tipo: str):
     if os.path.exists(ruta):
@@ -55,7 +55,6 @@ def obtener_geojson_local(ruta: str, tipo: str):
 def cargar_datos_kobo():
     URL_AFORO = "https://kf.kobotoolbox.org/api/v2/assets/adRKxesyy7hBQNQbNVCtdt/data.json?limit=1000&ordering=-_submission_time"
     URL_MAPA  = "https://kf.kobotoolbox.org/api/v2/assets/and5RtS5yp74muGFDddySr/data.json?limit=1000"
-    
     TOKEN = st.secrets["AFORO_TOKEN"]
     HEADERS = {'Authorization': f'Token {TOKEN}'}
     try:
@@ -194,7 +193,13 @@ def _point_in_multipolygon(pt, coords):
                 return True
         return False
 
-def _squared_distance_point_to_segment(px, py, x1, y1, x2, y2):
+# ======= NUEVA LÓGICA EN METROS PARA LÍNEAS (más estable) =======
+
+def _squared_distance_point_to_segment_m(px, py, x1, y1, x2, y2):
+    """
+    Distancia al cuadrado entre el punto P(px,py) y el segmento X1(x1,y1)-X2(x2,y2),
+    todas las coordenadas ya en METROS (no grados).
+    """
     vx, vy = x2 - x1, y2 - y1
     wx, wy = px - x1, py - y1
     c1 = vx * wx + vy * wy
@@ -207,25 +212,41 @@ def _squared_distance_point_to_segment(px, py, x1, y1, x2, y2):
     bx, by = x1 + b * vx, y1 + b * vy
     return (px - bx)**2 + (py - by)**2
 
-def _min_squared_distance_to_lines(coords, px, py):
+
+def _min_squared_distance_to_lines_m(coords, px_deg, py_deg, m_per_deg_lon, m_per_deg_lat):
+    """
+    Distancia mínima al cuadrado en METROS entre un punto (px_deg, py_deg) y una geometría
+    LineString/MultiLineString en grados (lon, lat). Se convierte todo a METROS.
+    """
+    # Convertir punto a metros
+    px_m = float(px_deg) * m_per_deg_lon
+    py_m = float(py_deg) * m_per_deg_lat
+
     def line_dist(line):
         dmin = float('inf')
+        # line = [[lon, lat], [lon, lat], ...]
         for i in range(len(line) - 1):
-            x1, y1 = line[i]
-            x2, y2 = line[i + 1]
-            d = _squared_distance_point_to_segment(px, py, x1, y1, x2, y2)
+            x1_m = float(line[i][0]) * m_per_deg_lon
+            y1_m = float(line[i][1]) * m_per_deg_lat
+            x2_m = float(line[i+1][0]) * m_per_deg_lon
+            y2_m = float(line[i+1][1]) * m_per_deg_lat
+            d = _squared_distance_point_to_segment_m(px_m, py_m, x1_m, y1_m, x2_m, y2_m)
             if d < dmin:
                 dmin = d
         return dmin
+
+    # LineString o MultiLineString
     if len(coords) > 0 and isinstance(coords[0][0], (float, int)):
-        return line_dist(coords)            # LineString
+        return line_dist(coords)  # LineString
     else:
-        dmin = float('inf')                 # MultiLineString
+        dmin = float('inf')
         for line in coords:
             d = line_dist(line)
             if d < dmin:
                 dmin = d
         return dmin
+
+# ================================================================
 
 def _buscar_marker_por_click(lat, lon, df_pts, tol_metros=30):
     if df_pts is None or df_pts.empty:
@@ -243,11 +264,17 @@ def _buscar_marker_por_click(lat, lon, df_pts, tol_metros=30):
     return None
 
 def _buscar_feature_por_click(lat, lon, canales_all, catastro_all,
-                              tol_metros=25, considerar_canales=True, considerar_catastro=True, priorizar_canal=True):
-    lat_abs = abs(lat)
-    deg_lat = tol_metros / 111_320.0
-    deg_lon = tol_metros / (111_320.0 * max(np.cos(np.radians(lat_abs)), 1e-6))
-    tol2 = max(deg_lat, deg_lon) ** 2
+                              tol_metros=35, considerar_canales=True, considerar_catastro=True, priorizar_canal=True):
+    """
+    Devuelve (fid, props) del feature más cercano al clic.
+    - Para polígonos (catastro): test de punto-en-polígono (en grados).
+    - Para líneas (canales): distancia mínima P-Segmento en METROS.
+    """
+    # Factores de conversión a METROS según latitud del clic
+    lat_abs = abs(float(lat))
+    m_per_deg_lat = 111_320.0
+    m_per_deg_lon = 111_320.0 * max(np.cos(np.radians(lat_abs)), 1e-6)
+    tol2_m = float(tol_metros) ** 2
 
     def pick_parcela():
         if not (considerar_catastro and catastro_all):
@@ -263,15 +290,20 @@ def _buscar_feature_por_click(lat, lon, canales_all, catastro_all,
     def pick_canal():
         if not (considerar_canales and canales_all):
             return None
-        best = (None, None, float('inf'))
+        best = (None, None, float('inf'))  # (fid, props, d2_metros)
         for feat in canales_all.get('features', []):
             g = feat.get('geometry', {})
             if g.get('type') in ('LineString', 'MultiLineString'):
-                d2 = _min_squared_distance_to_lines(g.get('coordinates', []), lon, lat)
-                if d2 < best[2]:
+                d2_m = _min_squared_distance_to_lines_m(
+                    g.get('coordinates', []),
+                    px_deg=float(lon), py_deg=float(lat),
+                    m_per_deg_lon=m_per_deg_lon,
+                    m_per_deg_lat=m_per_deg_lat
+                )
+                if d2_m < best[2]:
                     p = feat.get('properties', {})
-                    best = (p.get('fid'), p, d2)
-        if best[0] is not None and best[2] <= tol2:
+                    best = (p.get('fid'), p, d2_m)
+        if best[0] is not None and np.isfinite(best[2]) and best[2] <= tol2_m:
             return best[0], best[1]
         return None
 
@@ -346,7 +378,6 @@ if not df_maestro.empty:
     folium.map.CustomPane('pane_canales',  z_index=400).add_to(m)
     folium.map.CustomPane('pane_markers',  z_index=650).add_to(m)
 
-    # Catastro (SIN highlight para evitar flicker)
     # Catastro (highlight SUAVE)
     if show_catastro and catastro_all:
         folium.GeoJson(
@@ -358,10 +389,9 @@ if not df_maestro.empty:
                 'fillOpacity': 0.12
             },
             highlight_function=lambda x: {
-                # cambios mínimos para evitar repintados pesados
-                'color': '#D35400',      # un poco más intenso que el base
-                'weight': 2,             # mismo grosor (o 2 si querés un pelín más)
-                'fillOpacity': 0.20      # +0.08 sobre el base
+                'color': '#D35400',   # un poco más intenso
+                'weight': 2,          # leve grosor en hover
+                'fillOpacity': 0.20   # leve aumento del fill
             },
             pane='pane_catastro'
         ).add_to(m)
@@ -462,9 +492,9 @@ if not df_maestro.empty:
     # Control de ubicación
     LocateControl(position='topleft').add_to(m)
 
-    # --- RENDER OPTIMIZADO (prioridad last_clicked) ---
+    # --- RENDER (prioridad last_clicked) ---
     salida = st_folium(
-        m, width="100%", height=600, key="mapa_estatico",  # key estable
+        m, width="100%", height=600, key="mapa_estatico",
         returned_objects=["last_clicked", "last_object_clicked"],
         use_container_width=True
     )
@@ -495,7 +525,7 @@ if not df_maestro.empty:
                 lat, lon,
                 canales_all if show_canales else None,
                 catastro_all if show_catastro else None,
-                tol_metros=25,
+                tol_metros=35,   # <-- estable en mobile; ajustable a 30 si querés más precisión
                 considerar_canales=show_canales,
                 considerar_catastro=show_catastro,
                 priorizar_canal=True
