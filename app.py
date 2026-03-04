@@ -5,8 +5,10 @@ import folium
 import json
 import os
 import numpy as np
+from datetime import date, timedelta
 from streamlit_folium import st_folium
 from folium.plugins import LocateControl
+from pandas.api.types import is_datetime64tz_dtype
 
 # 1) CONFIGURACIÓN
 st.set_page_config(page_title="Consorcio San Ramón - Las Pircas", layout="wide")
@@ -55,7 +57,10 @@ def obtener_geojson_local(ruta: str, tipo: str):
 def cargar_datos_kobo():
     URL_AFORO = "https://kf.kobotoolbox.org/api/v2/assets/adRKxesyy7hBQNQbNVCtdt/data.json?limit=1000&ordering=-_submission_time"
     URL_MAPA  = "https://kf.kobotoolbox.org/api/v2/assets/and5RtS5yp74muGFDddySr/data.json?limit=1000"
+
     TOKEN = st.secrets["AFORO_TOKEN"]
+    
+
     HEADERS = {'Authorization': f'Token {TOKEN}'}
     try:
         r1 = requests.get(URL_AFORO, headers=HEADERS, timeout=20)
@@ -93,8 +98,16 @@ def cargar_datos_kobo():
         if not df_a.empty:
             df_a['af_actual'] = df_a['af_actual'].astype(str).str.strip()
             df_a['fecha_dt']  = pd.to_datetime(df_a['Fecha'] + ' ' + df_a['Hora'], errors='coerce')
+
+            # 🔧 Normalizar: remover tz si viniera con zona horaria (evita comparaciones tz-aware vs naive)
+            if is_datetime64tz_dtype(df_a['fecha_dt']):
+                try:
+                    df_a['fecha_dt'] = df_a['fecha_dt'].dt.tz_convert(None)
+                except Exception:
+                    df_a['fecha_dt'] = df_a['fecha_dt'].dt.tz_localize(None)
+
             df_a['caudal']    = pd.to_numeric(df_a['q_final'], errors='coerce').fillna(0).astype(int)
-            df_a['fecha_format'] = df_a['fecha_dt'].dt.strftime('%d/%m')
+            df_a['fecha_format'] = df_a['fecha_dt'].dt.strftime('%d/%m/%Y')
             df_a['hora_format']  = df_a['fecha_dt'].dt.strftime('%H:%M')
 
         return df_a, df_m
@@ -104,7 +117,10 @@ def cargar_datos_kobo():
 # --- CREDITOS INTA ---
 URL_PRECIPITACIONES = "https://territorios.inta.gob.ar/assets/aYqLUVvU3EYiDa7NoJbPKF/submissions/?format=json"
 URL_MAPA_P = "https://territorios.inta.gob.ar/assets/aFwWKNGXZKppgNYKa33wC8/submissions/?format=json"
+
 TOKEN2 = st.secrets["PRECI_TOKEN"]
+
+
 HEADERS_INTA = {'Authorization': f'Token {TOKEN2}'}
 
 def extraer_coordenadas_pluv(row):
@@ -163,7 +179,7 @@ def get_color_sistema(sistema):
     }
     return colores.get(sistema, "#808080")
 
-# --- LÓGICA GEOMÉTRICA ---
+# --- LÓGICA GEOMÉTRICA y selección (en METROS para líneas) ---
 def _point_in_polygon(pt, polygon):
     x, y = pt
     inside = False
@@ -184,22 +200,15 @@ def _point_in_multipolygon(pt, coords):
             if _point_in_polygon(pt, hole):
                 return False
         return True
-    # Polygon vs MultiPolygon
     if len(coords) > 0 and isinstance(coords[0][0][0], (float, int)):
         return poly_contains(pt, coords)  # Polygon
     else:
-        for poly in coords:               # MultiPolygon
+        for poly in coords:
             if poly_contains(pt, poly):
                 return True
         return False
 
-# ======= NUEVA LÓGICA EN METROS PARA LÍNEAS (más estable) =======
-
 def _squared_distance_point_to_segment_m(px, py, x1, y1, x2, y2):
-    """
-    Distancia al cuadrado entre el punto P(px,py) y el segmento X1(x1,y1)-X2(x2,y2),
-    todas las coordenadas ya en METROS (no grados).
-    """
     vx, vy = x2 - x1, y2 - y1
     wx, wy = px - x1, py - y1
     c1 = vx * wx + vy * wy
@@ -212,19 +221,12 @@ def _squared_distance_point_to_segment_m(px, py, x1, y1, x2, y2):
     bx, by = x1 + b * vx, y1 + b * vy
     return (px - bx)**2 + (py - by)**2
 
-
 def _min_squared_distance_to_lines_m(coords, px_deg, py_deg, m_per_deg_lon, m_per_deg_lat):
-    """
-    Distancia mínima al cuadrado en METROS entre un punto (px_deg, py_deg) y una geometría
-    LineString/MultiLineString en grados (lon, lat). Se convierte todo a METROS.
-    """
-    # Convertir punto a metros
     px_m = float(px_deg) * m_per_deg_lon
     py_m = float(py_deg) * m_per_deg_lat
 
     def line_dist(line):
         dmin = float('inf')
-        # line = [[lon, lat], [lon, lat], ...]
         for i in range(len(line) - 1):
             x1_m = float(line[i][0]) * m_per_deg_lon
             y1_m = float(line[i][1]) * m_per_deg_lat
@@ -235,7 +237,6 @@ def _min_squared_distance_to_lines_m(coords, px_deg, py_deg, m_per_deg_lon, m_pe
                 dmin = d
         return dmin
 
-    # LineString o MultiLineString
     if len(coords) > 0 and isinstance(coords[0][0], (float, int)):
         return line_dist(coords)  # LineString
     else:
@@ -245,8 +246,6 @@ def _min_squared_distance_to_lines_m(coords, px_deg, py_deg, m_per_deg_lon, m_pe
             if d < dmin:
                 dmin = d
         return dmin
-
-# ================================================================
 
 def _buscar_marker_por_click(lat, lon, df_pts, tol_metros=30):
     if df_pts is None or df_pts.empty:
@@ -265,12 +264,6 @@ def _buscar_marker_por_click(lat, lon, df_pts, tol_metros=30):
 
 def _buscar_feature_por_click(lat, lon, canales_all, catastro_all,
                               tol_metros=35, considerar_canales=True, considerar_catastro=True, priorizar_canal=True):
-    """
-    Devuelve (fid, props) del feature más cercano al clic.
-    - Para polígonos (catastro): test de punto-en-polígono (en grados).
-    - Para líneas (canales): distancia mínima P-Segmento en METROS.
-    """
-    # Factores de conversión a METROS según latitud del clic
     lat_abs = abs(float(lat))
     m_per_deg_lat = 111_320.0
     m_per_deg_lon = 111_320.0 * max(np.cos(np.radians(lat_abs)), 1e-6)
@@ -329,7 +322,7 @@ if "sel_type" not in st.session_state:
 if "sel_data" not in st.session_state:
     st.session_state.sel_data = None
 if "base_layer" not in st.session_state:
-    st.session_state.base_layer = "Satélite"
+    st.session_state.base_layer = "OSM"
 if "_clear_once" not in st.session_state:
     st.session_state._clear_once = False
 
@@ -339,11 +332,20 @@ df_pluv_meta, df_pluv_pp = cargar_pluviometros_INTAlike()
 
 # 4) TÍTULO
 st.markdown(
-    '<div class="titulo-responsive"><span class="emoji">🌊</span> Red de Aforos: San Ramón - Las Pircas</div>',
+    '<div class="titulo-responsive"><span class="emoji">🌊</span> Aforos San Ramón - Las Pircas</div>',
     unsafe_allow_html=True
 )
 
-if not df_maestro.empty:
+if df_maestro.empty:
+    st.error("No se pudieron cargar los datos de Kobo.")
+    st.stop()
+
+# ===================
+# PESTAÑAS: MAPA / DATOS (Gráficos los sumamos luego)
+# ===================
+tab_mapa, tab_datos = st.tabs(["🗺️ Mapa", "📄 Datos"])
+
+with tab_mapa:
     # 5) SIDEBAR: CONTROLES
     with st.sidebar:
         st.markdown('<div class="ficha-header">MAPA BASE</div>', unsafe_allow_html=True)
@@ -360,7 +362,7 @@ if not df_maestro.empty:
     canales_all = obtener_geojson_local("canales.geojson", "canales")
     catastro_all = obtener_geojson_local("catastro.geojson", "catastro")
 
-    # 7) MAPA (sin persistencia de vista para reducir “salto” visual en Cloud)
+    # 7) MAPA
     m = folium.Map(
         location=[df_maestro['lat'].mean(), df_maestro['lon'].mean()],
         zoom_start=13,
@@ -383,15 +385,15 @@ if not df_maestro.empty:
         folium.GeoJson(
             catastro_all,
             style_function=lambda x: {
-                'color': '#E67E22',  # base
+                'color': '#E67E22',
                 'weight': 1,
                 'fillColor': '#F39C12',
                 'fillOpacity': 0.12
             },
             highlight_function=lambda x: {
-                'color': '#D35400',   # un poco más intenso
-                'weight': 2,          # leve grosor en hover
-                'fillOpacity': 0.20   # leve aumento del fill
+                'color': '#D35400',
+                'weight': 2,
+                'fillOpacity': 0.20
             },
             pane='pane_catastro'
         ).add_to(m)
@@ -504,7 +506,6 @@ if not df_maestro.empty:
         st.session_state._clear_once = False
         clic = None
     else:
-        # PRIORIDAD al click del mapa: evita que un polígono grande capture el evento
         clic = salida.get("last_clicked") or salida.get("last_object_clicked")
 
     if clic and isinstance(clic, dict) and {'lat', 'lng'} <= clic.keys():
@@ -525,7 +526,7 @@ if not df_maestro.empty:
                 lat, lon,
                 canales_all if show_canales else None,
                 catastro_all if show_catastro else None,
-                tol_metros=35,   # <-- estable en mobile; ajustable a 30 si querés más precisión
+                tol_metros=35,
                 considerar_canales=show_canales,
                 considerar_catastro=show_catastro,
                 priorizar_canal=True
@@ -552,8 +553,8 @@ if not df_maestro.empty:
             st.subheader(f"📍 {sel.get('Aforador', 'Aforador')}")
             st.write(f"**Tipo:** {sel.get('Tipo_fmt', sel.get('Tipo', 'N/D'))}")
             st.markdown("---")
-            st.write("**Historial Reciente (5):**")
-            u5 = df_historial[df_historial['af_actual'] == sel.get('id_aforador', '')].sort_values('fecha_dt', ascending=False).head(5)
+            st.write("**Últimos datos:**")
+            u5 = df_historial[df_historial['af_actual'] == sel.get('id_aforador', '')].sort_values('fecha_dt', ascending=False).head(3)
             if not u5.empty:
                 for _, r in u5.iterrows():
                     st.markdown(
@@ -565,8 +566,23 @@ if not df_maestro.empty:
         elif st.session_state.sel_type == 'geojson' and st.session_state.sel_data:
             p = st.session_state.sel_data['props']
             if st.session_state.sel_data['fid'].startswith("canal_"):
+                longi_raw = p.get('longi', 0)
+                try:
+                    longi_int = int(round(float(longi_raw)))
+                except:
+                    longi_int = 0
                 st.subheader(f"🌊 {p.get('tipo', 'N/A')}: {p.get('nombre', 'Sin nombre')}")
-                st.markdown(f"- **Sistema:** {p.get('sistema', 'N/A')}\n- **Longitud:** {p.get('longi', '0')} m\n- **Tipo:** {p.get('tipo', 'N/A')}\n- **Ref.:** {p.get('pu_priv', 'N/A')}")
+                st.markdown(
+                    f"- **Sistema:** {p.get('sistema', 'N/A')}\n"
+                    f"- **Longitud:** {longi_int} m\n"
+                    f"- **Tipo:** {p.get('tipo', 'N/A')}\n"
+                    f"- **Ref.:** {p.get('pu_priv', 'N/A')}\n"
+                    f"- **Estado.:** {p.get('reves', 'N/A')}\n"
+                    f"- **Ancho Inf.:** {p.get('ancho_inf', 'N/A')} m\n"
+                    f"- **Ancho Sup.:** {p.get('ancho_sup', 'N/A')} m\n"
+                    f"- **Talud:** {p.get('talud', 'N/A')} m\n"
+                    f"- **Altura:** {p.get('Altura', 'N/A')} m"
+                )
             else:
                 area_raw = p.get('shape_area', 0) or 0
                 try:
@@ -578,14 +594,126 @@ if not df_maestro.empty:
         else:
             st.info("💡 Haz clic en un elemento del mapa.")
 
-    # 11) ANÁLISIS HISTÓRICO
-    if not df_historial.empty:
-        st.markdown("---")
-        with st.expander("📊 Gráficos y Comparativas"):
-            af_sel = st.selectbox("Elegir punto de control:", options=sorted(df_maestro['Aforador'].unique()))
-            id_sel = df_maestro[df_maestro['Aforador'] == af_sel]['id_aforador'].values[0]
-            df_plot = df_historial[df_historial['af_actual'] == id_sel].sort_values('fecha_dt')
-            if not df_plot.empty:
-                st.area_chart(df_plot.set_index('fecha_dt')['caudal'])
-else:
-    st.error("No se pudieron cargar los datos de Kobo.")
+# ===================
+# Pestaña: DATOS
+# ===================
+with tab_datos:
+    st.markdown("### 📄 Datos de aforadores (últimas mediciones)")
+    col1, col2 = st.columns([1, 2])
+    with col1:
+        modo = st.radio("Ver por:", ["Día", "Semana"], horizontal=True, key="modo_datos")
+    with col2:
+        # Fecha base por defecto = fecha más reciente en df_historial, si existe; si no, hoy
+        fecha_default = date.today()
+        if not df_historial.empty and pd.notna(df_historial['fecha_dt'].max()):
+            # Por si acaso: asegurar naive
+            fmax = df_historial['fecha_dt']
+            if is_datetime64tz_dtype(fmax):
+                fmax = fmax.dt.tz_localize(None)
+            fecha_max = fmax.max()
+            if pd.notna(fecha_max):
+                fecha_default = fecha_max.date()
+        fecha_sel = st.date_input("Seleccioná fecha", value=fecha_default, format="DD/MM/YYYY", key="fecha_datos")
+
+    # Armar rango de fecha
+    if modo == "Día":
+        inicio = pd.Timestamp(fecha_sel)
+        fin = inicio + pd.Timedelta(days=1)
+        subt = f"📅 Día: {inicio.strftime('%d/%m/%Y')}"
+    else:
+        fin = pd.Timestamp(fecha_sel) + pd.Timedelta(days=1)
+        inicio = pd.Timestamp(fecha_sel) - pd.Timedelta(days=6)
+        subt = f"📅 Semana: {inicio.strftime('%d/%m/%Y')} a {(fin - pd.Timedelta(days=1)).strftime('%d/%m/%Y')}"
+    st.caption(subt)
+
+    # Filtrar historial por rango (ambos naive)
+    ser_dt = df_historial['fecha_dt']
+    # Si viniera con tz por algún flujo residual: quitar tz para comparar con naive
+    if is_datetime64tz_dtype(ser_dt):
+        ser_dt = ser_dt.dt.tz_localize(None)
+
+    mask = (ser_dt >= inicio) & (ser_dt < fin)
+    df_rango = df_historial[mask].copy()
+
+    # Asegurar columna Observaciones (si no existe)
+    if 'Observaciones' not in df_rango.columns:
+        df_rango['Observaciones'] = ""
+
+    # Asegurar columna 'orden' en maestro
+    # ⬇️ Si tu campo exacto se llama distinto, reemplazá la detección por:
+    # col_orden = 'NOMBRE_EXACTO_DE_TU_CAMPO'
+    col_orden = next((c for c in df_maestro.columns if c.lower() == 'orden' or 'orden' in c.lower()), None)
+    if col_orden is None:
+        df_maestro['orden'] = np.inf  # si no está, lo mando al final
+        col_orden = 'orden'
+    df_maestro[col_orden] = pd.to_numeric(df_maestro[col_orden], errors='coerce')
+
+    # Construir tabla tipo "wide" con 3 últimos por aforador dentro del rango
+    filas = []
+    df_maestro_sorted = df_maestro.sort_values(by=[col_orden, 'Aforador'], ascending=[True, True], na_position='last')
+    df_rango_sorted = df_rango.sort_values('fecha_dt', ascending=False)
+
+    for _, m in df_maestro_sorted.iterrows():
+        af_id = m['id_aforador']
+        nombre = m.get('Aforador', '')
+        tipo = m.get('Tipo_fmt', m.get('Tipo', 'N/D'))
+        orden_val = m.get(col_orden, np.inf)
+
+        rows_af = df_rango_sorted[df_rango_sorted['af_actual'] == af_id].head(3)
+
+        # Rank 1 (más reciente)
+        if len(rows_af) >= 1:
+            r1 = rows_af.iloc[0]
+            f1, h1, c1 = r1['fecha_format'], r1['hora_format'], int(r1['caudal'])
+            obs = str(r1.get('Observaciones', ''))
+            dt1 = r1['fecha_dt']
+        else:
+            f1, h1, c1, obs, dt1 = "", "", None, "", pd.NaT
+
+        # Rank 2
+        if len(rows_af) >= 2:
+            r2 = rows_af.iloc[1]
+            f2, h2, c2 = r2['fecha_format'], r2['hora_format'], int(r2['caudal'])
+        else:
+            f2, h2, c2 = "", "", None
+
+        # Rank 3
+        if len(rows_af) >= 3:
+            r3 = rows_af.iloc[2]
+            f3, h3, c3 = r3['fecha_format'], r3['hora_format'], int(r3['caudal'])
+        else:
+            f3, h3, c3 = "", "", None
+
+        filas.append({
+            "Orden": orden_val,
+            "Aforador": nombre,
+            "Fecha_1": f1, "Hora_1": h1, "Caudal_1 (l/s)": c1,
+            "Fecha_2": f2, "Hora_2": h2, "Caudal_2 (l/s)": c2,
+            "Fecha_3": f3, "Hora_3": h3, "Caudal_3 (l/s)": c3,
+            "Observaciones": obs,
+            "_dt1": dt1  # auxiliar para ordenar por fecha/hora más reciente
+        })
+
+    df_tab = pd.DataFrame(filas)
+
+    # Ordenar: primero por fecha/hora más reciente (desc), luego por Orden (asc) y Aforador (asc)
+    if not df_tab.empty:
+        df_tab = df_tab.sort_values(by=["_dt1", "Orden", "Aforador"], ascending=[False, True, True], na_position='last')
+        df_tab = df_tab.drop(columns=["_dt1"])
+
+    # Mostrar
+    st.dataframe(
+        df_tab,
+        hide_index=True,
+        use_container_width=True
+    )
+
+    # Descargar CSV
+    if not df_tab.empty:
+        csv = df_tab.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            "⬇️ Descargar CSV",
+            data=csv,
+            file_name=f"aforadores_{'dia' if modo=='Día' else 'semana'}_{pd.Timestamp(fecha_sel).strftime('%Y%m%d')}.csv",
+            mime="text/csv"
+        )
