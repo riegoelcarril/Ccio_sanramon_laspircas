@@ -4,3 +4,7 @@ requests
 numpy
 folium
 streamlit-folium
+altair
+pyarrow
+reportlab
+Pillow
