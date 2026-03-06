@@ -731,45 +731,55 @@ with tab_mapa:
     LocateControl(position='topleft').add_to(m)
     folium.LayerControl(collapsed=True).add_to(m)
 
+    # 1. Capturamos el resultado del mapa
     salida = st_folium(
-        m, width="100%", height=600, key="mapa_estatico",
+        m, width="100%", height=600, key="mapa_gestion",
         returned_objects=["last_clicked", "last_object_clicked"],
         use_container_width=True
     )
 
+    # 2. Lógica de persistencia y detección
     if st.session_state._clear_once:
         st.session_state._clear_once = False
-        clic = None
+        # No hacemos nada, dejamos que el estado siga vacío
     else:
-        clic = salida.get("last_clicked") or salida.get("last_object_clicked")
+        # Intentamos obtener coordenadas de dos fuentes posibles
+        obj_click = salida.get("last_object_clicked")
+        map_click = salida.get("last_clicked")
+        
+        # Determinamos qué coordenadas usar (priorizamos el objeto directo)
+        actual_click = obj_click if obj_click else map_click
 
-    if clic and isinstance(clic, dict) and {'lat', 'lng'} <= clic.keys():
-        lat, lon = clic['lat'], clic['lng']
+        if actual_click:
+            lat, lon = actual_click['lat'], actual_click['lng']
 
-        match_m = _buscar_marker_por_click(
-            lat, lon,
-            df_maestro if show_aforadores else df_maestro.iloc[0:0],
-            tol_metros=30
-        )
-        if match_m is not None:
-            st.session_state.sel_type = 'marker'
-            st.session_state.sel_data = match_m.to_dict()
-        else:
-            fid, props = _buscar_feature_por_click(
-                lat, lon,
-                canales_all if show_canales else None,
-                catastro_all if show_catastro else None,
-                tol_metros=35,
-                considerar_canales=show_canales,
-                considerar_catastro=show_catastro,
-                priorizar_canal=True
+            # BUSQUEDA PASO A PASO
+            # Primero: ¿Es un aforador (marcador)?
+            match_m = _buscar_marker_por_click(
+                lat, lon, 
+                df_maestro if show_aforadores else df_maestro.iloc[0:0], 
+                tol_metros=35
             )
-            if fid:
-                st.session_state.sel_type = 'geojson'
-                st.session_state.sel_data = {"fid": fid, "props": props}
+
+            if match_m is not None:
+                st.session_state.sel_type = 'marker'
+                st.session_state.sel_data = match_m.to_dict()
             else:
-                st.session_state.sel_type = None
-                st.session_state.sel_data = None
+                # Segundo: ¿Es un canal o catastro (GeoJSON)?
+                fid, props = _buscar_feature_por_click(
+                    lat, lon,
+                    canales_all if show_canales else None,
+                    catastro_all if show_catastro else None,
+                    tol_metros=40,
+                    considerar_canales=show_canales,
+                    considerar_catastro=show_catastro,
+                    priorizar_canal=True
+                )
+                if fid:
+                    st.session_state.sel_type = 'geojson'
+                    st.session_state.sel_data = {"fid": fid, "props": props}
+                # Nota: No reseteamos a None aquí para que si el usuario hace un clic 
+                # "al aire" por error, la información anterior no desaparezca de inmediato.
 
     with st.sidebar:
         st.markdown('<div class="ficha-header">DETALLE DEL ELEMENTO</div>', unsafe_allow_html=True)
@@ -780,24 +790,28 @@ with tab_mapa:
             st.session_state._clear_once = True
             st.rerun()
 
-        if st.session_state.sel_type == 'marker' and st.session_state.sel_data:
+        if st.session_state.get('sel_type') == 'marker' and st.session_state.get('sel_data'):
             sel = st.session_state.sel_data
             st.subheader(f"📍 {sel.get('Aforador', 'Aforador')}")
             st.write(f"**Tipo:** {sel.get('Tipo_fmt', sel.get('Tipo', 'N/D'))}")
             st.markdown("---")
             st.write("**Últimos datos:**")
-            u5 = df_historial[df_historial['af_actual'] == sel.get('id_aforador', '')].sort_values('fecha_dt', ascending=False).head(3)
+            u5 = df_historial[df_historial['af_actual'] == sel.get('id_aforador', '')] \
+                    .sort_values('fecha_dt', ascending=False).head(3)
             if not u5.empty:
                 for _, r in u5.iterrows():
                     st.markdown(
-                        f'<div class="metric-box">📅 {r["fecha_format"]} {r["hora_format"]}<br><b>Caudal: {r["caudal"]} l/s</b></div>',
+                        f'<div class="metric-box">📅 {r["fecha_format"]} {r["hora_format"]}<br>'
+                        f'<b>Caudal: {r["caudal"]} l/s</b></div>',
                         unsafe_allow_html=True
                     )
             else:
                 st.info("Sin registros de caudal.")
-        elif st.session_state.sel_type == 'geojson' and st.session_state.sel_data:
+
+        elif st.session_state.get('sel_type') == 'geojson' and st.session_state.get('sel_data'):
             p = st.session_state.sel_data['props']
-            if st.session_state.sel_data['fid'].startswith("canal_"):
+            fid = st.session_state.sel_data['fid']
+            if str(fid).startswith("canal_"):
                 longi_raw = p.get('longi', 0)
                 try:
                     longi_int = int(round(float(longi_raw)))
@@ -823,9 +837,9 @@ with tab_mapa:
                     area_ha = 0.0
                 st.subheader(f"🚜 Parcela: {p.get('finca', 'S/N')}")
                 st.markdown(f"- **Catastro:** {p.get('catastro', 'N/A')}\n- **Área:** {area_ha} Ha")
+
         else:
             st.info("💡 Haz clic en un elemento del mapa.")
-
 # ===================
 # TAB: DATOS (listado rápido)
 # ===================
