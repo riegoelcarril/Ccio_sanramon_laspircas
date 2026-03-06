@@ -13,7 +13,7 @@ from datetime import date, timedelta
 from streamlit_folium import st_folium
 from folium.plugins import LocateControl
 from pandas.api.types import is_datetime64tz_dtype
-import altair as alt  # para gráficos combinados (lluvia + caudal)
+import altair as alt  # (queda importado aunque ya no usamos el cruce)
 from io import BytesIO
 from reportlab.lib.pagesizes import A4, landscape
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
@@ -34,7 +34,7 @@ def _logo_base64(path: str):
         return None
 
 # 1) CONFIGURACIÓN
-st.set_page_config(page_title="Consorcio San Ramón - Las Pircas", layout="wide",initial_sidebar_state="expanded")
+st.set_page_config(page_title="Consorcio San Ramón - Las Pircas", layout="wide", initial_sidebar_state="expanded")
 
 # 2) ESTILOS (IMPORTANTE: <style> REAL, NO ESCAPADO)
 st.markdown("""
@@ -158,22 +158,18 @@ def generar_pdf_reporte_datos(df_tab: pd.DataFrame, modo: str, inicio: pd.Timest
     styles = getSampleStyleSheet()
     elems = []
 
-    # Encabezado con logo (si existe)
-    # ===== Encabezado con logo (a la izquierda, sin deformar) =====
-    # ===== Encabezado con logo (a la izquierda, sin deformar) + línea separadora =====
+    # Encabezado
     try:
         if os.path.exists(LOGO_PATH):
-            # 1) Escalado proporcional por altura (no deforma)
             img_reader = ImageReader(LOGO_PATH)
-            iw, ih = img_reader.getSize()  # tamaño real en px
-            target_h = 22*mm               # <-- altura objetivo del logo (ajustá si querés)
+            iw, ih = img_reader.getSize()
+            target_h = 22*mm
             scale = target_h / ih
             logo_w = iw * scale
             logo_h = target_h
 
             logo_flow = RLImage(LOGO_PATH, width=logo_w, height=logo_h)
 
-            # 2) Título + subtítulo a la derecha, logo a la izquierda
             header_tbl = RLTable(
                 data=[
                     [logo_flow, Paragraph(f"<b>{titulo}</b>", styles["Title"])],
@@ -182,8 +178,8 @@ def generar_pdf_reporte_datos(df_tab: pd.DataFrame, modo: str, inicio: pd.Timest
                 colWidths=[logo_w + 6*mm, None]
             )
             header_tbl.setStyle(TableStyle([
-                ('SPAN', (0,0), (0,1)),                # Logo ocupa ambas filas
-                ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),  # Alineación vertical prolija
+                ('SPAN', (0,0), (0,1)),
+                ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
                 ('ALIGN',  (0,0), (0,1), 'LEFT'),
                 ('LEFTPADDING',  (0,0), (-1,-1), 0),
                 ('RIGHTPADDING', (0,0), (-1,-1), 6),
@@ -196,12 +192,11 @@ def generar_pdf_reporte_datos(df_tab: pd.DataFrame, modo: str, inicio: pd.Timest
             elems.append(Paragraph(f"<b>{titulo}</b>", styles["Title"]))
             elems.append(Paragraph(subtitulo, styles["Normal"]))
 
-        # 3) Separador (línea horizontal) debajo del encabezado
         elems.append(Spacer(1, 4))
         elems.append(HRFlowable(
-            width="100%",           # ancho total
-            thickness=0.8,          # grosor de la línea
-            color=colors.Color(0.12, 0.22, 0.54),  # azul institucional
+            width="100%",
+            thickness=0.8,
+            color=colors.Color(0.12, 0.22, 0.54),
             lineCap='round',
             spaceBefore=2,
             spaceAfter=10
@@ -307,7 +302,7 @@ def cargar_datos_kobo():
     except Exception:
         return pd.DataFrame(), pd.DataFrame()
 
-# --- CREDITOS INTA ---
+# --- CREDITOS INTA (se mantiene para el mapa) ---
 URL_PRECIPITACIONES = "https://territorios.inta.gob.ar/assets/aYqLUVvU3EYiDa7NoJbPKF/submissions/?format=json"
 URL_MAPA_P = "https://territorios.inta.gob.ar/assets/aFwWKNGXZKppgNYKa33wC8/submissions/?format=json"
 TOKEN2 = st.secrets["PRECI_TOKEN"]
@@ -563,10 +558,9 @@ if "_clear_once" not in st.session_state:
 df_historial, df_maestro = cargar_datos_kobo()
 df_pluv_meta, df_pluv_pp = cargar_pluviometros_INTAlike()
 
-# 4) TÍTULO — Desktop: logo + título alineados • Móvil: oculta logo y centra el título
+# 4) TÍTULO
 TITLE_TEXT = "Gestión de Aforos"
 
-# CSS: oculta el logo en móviles y centra el título como antes (evita que se “caiga”)
 st.markdown("""
 <style>
     .titulo-responsive {
@@ -593,10 +587,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Construcción del header
 st.markdown(f'<div class="titulo-responsive"><span class="emoji">🌊</span>{TITLE_TEXT}</div>', unsafe_allow_html=True)
-
-
 
 if df_maestro.empty:
     st.error("No se pudieron cargar los datos de Kobo.")
@@ -610,8 +601,6 @@ with st.sidebar:
     if os.path.exists(LOGO_PATH):
         st.image(LOGO_PATH, use_container_width=True)
         st.markdown("<hr>", unsafe_allow_html=True)
-    
-
 
 # ===================
 # PESTAÑAS: MAPA / DATOS / ANALISIS
@@ -623,18 +612,13 @@ tab_mapa, tab_datos, tab_analisis = st.tabs(["🗺️ Mapa", "📄 Datos", "📊
 # ===================
 with tab_mapa:
     with st.sidebar:
-        # ... aquí ya tenés tu logo arriba ...
-
-        # Creamos un bloque colapsable para el Mapa Base
-        with st.expander("🗺️ Mapa Base", expanded=False): 
+        with st.expander("🗺️ Mapa Base", expanded=False):
             st.session_state.base_layer = st.radio(
-                label="Seleccione:", 
+                label="Seleccione:",
                 options=["Satélite", "OSM"],
                 index=0 if st.session_state.base_layer == "Satélite" else 1,
                 horizontal=True
             )
-            
-        # Creamos otro bloque colapsable para las Capas
         with st.expander("📚 Capas", expanded=False):
             show_canales = st.checkbox("Canales", value=True)
             show_catastro = st.checkbox("Catastro", value=False)
@@ -1022,25 +1006,24 @@ with tab_datos:
         )
 
 # ===================
-# TAB: ANALISIS (nueva)
+# TAB: ANÁLISIS (sin cruce de lluvias, sin alertas)
 # ===================
 with tab_analisis:
     st.markdown("### 📊 Análisis y gráficos")
 
-    sub_sem, sub_comp, sub_mes = st.tabs(["📅 Semanal (1 aforador)", "🟰 Comparación (2 aforadores)", "📈 Dashboard mensual"])
+    # Tabs (sin dashboard mensual)
+    sub_sem, sub_comp = st.tabs(["📅 Semanal (1 aforador)", "🟰 Comparación (2 aforadores)"])
 
     # -----------------------
-    # SUBTAB: SEMANAL (1 aforador)
+    # SUBTAB: SEMANAL (1 aforador) — SIN lluvia, SIN alertas
     # -----------------------
     with sub_sem:
-        colA, colB, colC = st.columns([1.2, 1, 1])
+        colA, colB = st.columns([1.2, 1])
         aforadores_list = sorted(df_maestro["Aforador"].unique())
         with colA:
             af_sel = st.selectbox("Aforador", aforadores_list, index=0, key="anal_aforador")
         with colB:
             fecha_base = st.date_input("Semana a analizar", value=date.today(), format="DD/MM/YYYY", key="anal_semana")
-        with colC:
-            mostrar_lluvia = st.checkbox("Cruce lluvia–caudal", value=True)
 
         inicio_sem, fin_sem = _semana_bounds(fecha_base)
         st.caption(f"📅 Semana: {inicio_sem.strftime('%d/%m/%Y')} → {(fin_sem - pd.Timedelta(days=1)).strftime('%d/%m/%Y')}")
@@ -1107,50 +1090,7 @@ with tab_analisis:
                         st.markdown("**Acumulado de lecturas (l/s)**")
                         st.bar_chart(df_dias.set_index("dia")["acumulado"])
 
-                    st.subheader("🚨 Alertas")
-                    mask_out, stats = _iqr_outliers(df_sem["caudal"])
-                    out_count = int(mask_out.sum()) if stats else 0
-                    zeros = int((df_sem["caudal"] == 0).sum())
-                    if out_count == 0 and zeros == 0:
-                        st.success("Sin outliers ni caudales cero en la semana.")
-                    else:
-                        if out_count > 0:
-                            st.warning(f"Valores atípicos (IQR): {out_count} lecturas fuera de [{stats['low']:.1f}, {stats['high']:.1f}] l/s.")
-                        if zeros > 0:
-                            st.warning(f"Caudal cero detectado en {zeros} lecturas.")
-
-                    if mostrar_lluvia and not df_pluv_meta.empty and not df_pluv_pp.empty:
-                        af_row = df_maestro[df_maestro["Aforador"] == af_sel].iloc[0]
-                        pluv_info = _nearest_pluv_for(af_row["lat"], af_row["lon"], df_pluv_meta)
-                        if pluv_info:
-                            cod_pluv = pluv_info["cod"]
-                            nombre_pluv = pluv_info.get("nombre_visible", cod_pluv)
-                            df_ll = df_pluv_pp[(df_pluv_pp["cod"] == cod_pluv) &
-                                               (df_pluv_pp["fecha_dt"] >= inicio_sem) &
-                                               (df_pluv_pp["fecha_dt"] < fin_sem)].copy()
-                            if not df_ll.empty:
-                                df_ll["fecha"] = df_ll["fecha_dt"].dt.date
-                                df_sem["fecha"] = df_sem["fecha_dt"].dt.date
-                                df_caudal_dia = df_sem.groupby("fecha")["caudal"].mean().reset_index(name="Caudal promedio (l/s)")
-                                df_lluvia_dia = df_ll.groupby("fecha")["mm"].sum().reset_index(name="Lluvia (mm)")
-
-                                df_merge = pd.merge(df_caudal_dia, df_lluvia_dia, on="fecha", how="outer").sort_values("fecha")
-                                df_merge["fecha_str"] = pd.to_datetime(df_merge["fecha"]).dt.strftime("%d/%m")
-
-                                st.markdown(f"**Cruce con pluviómetro cercano:** {nombre_pluv}")
-                                try:
-                                    base = alt.Chart(df_merge).encode(x=alt.X('fecha:T', title='Fecha'))
-                                    line = base.mark_line(color='#1E3A8A').encode(y=alt.Y('Caudal promedio (l/s):Q', title='Caudal (l/s)'))
-                                    bars = base.mark_bar(color='#0E7490', opacity=0.5).encode(y=alt.Y('Lluvia (mm):Q', title='Lluvia (mm)'))
-                                    st.altair_chart(alt.layer(bars, line).resolve_scale(y='independent').properties(height=300), use_container_width=True)
-                                except Exception:
-                                    st.info("No se pudo renderizar eje dual; muestro gráficos separados.")
-                                    st.line_chart(df_merge.set_index(pd.to_datetime(df_merge["fecha"]))["Caudal promedio (l/s)"])
-                                    st.bar_chart(df_merge.set_index(pd.to_datetime(df_merge["fecha"]))["Lluvia (mm)"])
-                            else:
-                                st.info("No hay datos de lluvia para esa semana en el pluviómetro más cercano.")
-                        else:
-                            st.info("No se pudo determinar un pluviómetro cercano.")
+                    # 🔕 Sin alertas, sin cruce de lluvias
 
     # -----------------------
     # SUBTAB: COMPARACIÓN (2 aforadores)
@@ -1222,68 +1162,3 @@ with tab_analisis:
                     file_name=f"comparacion_{afA}_{afB}_{ini_cmp.strftime('%Y%m%d')}.csv",
                     mime="text/csv"
                 )
-
-    # -----------------------
-    # SUBTAB: DASHBOARD MENSUAL
-    # -----------------------
-    with sub_mes:
-        colmA, colmB = st.columns([1.2, 1])
-        with colmA:
-            af_m = st.selectbox("Aforador", sorted(df_maestro["Aforador"].unique()), key="mes_af")
-        with colmB:
-            fecha_mes = st.date_input("Mes a analizar", value=date.today(), format="DD/MM/YYYY", key="mes_fecha")
-
-        ini_mes, fin_mes = _mes_bounds(fecha_mes)
-        st.caption(f"📅 Mes: {ini_mes.strftime('%m/%Y')}")
-
-        if df_historial.empty:
-            st.info("Sin historial de aforos.")
-        else:
-            s = df_maestro.loc[df_maestro["Aforador"] == af_m, "id_aforador"]
-            if s.empty:
-                st.warning("No se encontró el ID del aforador seleccionado.")
-            else:
-                af_id = s.iloc[0]
-                df_m = df_historial[
-                    (df_historial["af_actual"] == af_id) &
-                    (df_historial["fecha_dt"] >= ini_mes) &
-                    (df_historial["fecha_dt"] < fin_mes)
-                ].copy()
-                if df_m.empty:
-                    st.info("Sin datos en el mes seleccionado.")
-                else:
-                    df_m = df_m.sort_values("fecha_dt")
-                    df_m["fecha"] = df_m["fecha_dt"].dt.date
-
-                    prom = float(pd.to_numeric(df_m["caudal"], errors="coerce").mean())
-                    mx = float(pd.to_numeric(df_m["caudal"], errors="coerce").max())
-                    mn = float(pd.to_numeric(df_m["caudal"], errors="coerce").min())
-                    dias_medidos = int(df_m["fecha"].nunique())
-                    lecturas = int(len(df_m))
-                    zeros = int((df_m["caudal"] == 0).sum())
-                    out_mask, stats = _iqr_outliers(df_m["caudal"])
-                    out_c = int(out_mask.sum()) if stats else 0
-
-                    k1, k2, k3, k4, k5 = st.columns(5)
-                    k1.metric("Promedio (l/s)", f"{prom:.1f}")
-                    k2.metric("Máximo (l/s)", f"{mx:.1f}")
-                    k3.metric("Mínimo (l/s)", f"{mn:.1f}")
-                    k4.metric("Días con medición", f"{dias_medidos}")
-                    k5.metric("Lecturas totales", f"{lecturas}")
-
-                    if zeros > 0 or out_c > 0:
-                        st.warning(f"Alertas: {zeros} lecturas con caudal 0 • {out_c} outliers (IQR).")
-
-                    df_diario = df_m.groupby("fecha")["caudal"].mean().reset_index(name="Promedio diario (l/s)")
-                    st.subheader("📊 Promedio diario (mes)")
-                    st.bar_chart(df_diario.set_index(pd.to_datetime(df_diario["fecha"]))["Promedio diario (l/s)"])
-
-                    st.subheader("📈 Caudal vs tiempo (mensual)")
-                    st.line_chart(df_m.set_index("fecha_dt")["caudal"])
-
-                    st.download_button(
-                        "⬇️ Descargar CSV mensual",
-                        data=df_m.to_csv(index=False).encode("utf-8"),
-                        file_name=f"mensual_{af_m}_{ini_mes.strftime('%Y%m')}.csv",
-                        mime="text/csv"
-                    )
