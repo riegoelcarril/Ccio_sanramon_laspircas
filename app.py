@@ -672,7 +672,53 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
-st.markdown(f'<div class="titulo-responsive"><span class="emoji">🌊</span>{TITLE_TEXT}</div>', unsafe_allow_html=True)
+st.markdown("""
+<style>
+
+    /* === CONTENEDOR DEL HEADER === */
+    .header-container {
+        margin-top: -1.5rem !important;   /* sube el título */
+        margin-bottom: 1.2rem !important;
+        text-align: center;
+    }
+
+    /* === TÍTULO PRINCIPAL RESPONSIVE === */
+    .header-title {
+        font-family: "Segoe UI", Roboto, sans-serif !important;
+
+        /* Responsive real: mínimo 1.5rem, ideal 3vw, máximo 2.6rem */
+        font-size: clamp(1.5rem, 3vw, 2.6rem) !important;
+
+        font-weight: 800 !important;
+        color: #1E3A8A !important;
+
+        line-height: 1.15 !important;
+        margin: 0 !important;
+        padding: 0 !important;
+    }
+
+    /* === BARRA RESPONSIVE === */
+    
+    .header-bar {
+        width: 100%;
+        height: 6px;
+        background: #1E3A8A;
+        margin: 8px 0 0 0;
+    }
+
+</style>
+
+<div class="header-container">
+    <div class="header-title">🌊 Gestión de Aforos</div>
+    <div class="header-bar"></div>
+</div>
+
+""", unsafe_allow_html=True)
+
+
+
+
+#st.markdown(f'<div class="titulo-responsive"><span class="emoji">🌊</span>{TITLE_TEXT}</div>', unsafe_allow_html=True)
 
 if df_maestro.empty:
     st.error("No se pudieron cargar los datos de Kobo.")
@@ -721,7 +767,7 @@ if "SEM_af_principal" not in st.session_state:
 # ===================
 # PESTAÑAS: MAPA / DATOS / ANALISIS
 # ===================
-tab_mapa, tab_datos, tab_analisis = st.tabs(["🗺️ Mapa", "📄 Datos", "📊 Análisis"])
+tab_mapa, tab_datos, tab_analisis = st.tabs(["🗺️ Mapa", "📄 Datos", "📊 Análisis (Semanal / Mensual / Anual)"])
 
 # ===================
 # TAB: MAPA
@@ -1126,7 +1172,7 @@ with tab_datos:
 # ===================
 with tab_analisis:
 
-    st.markdown("## 📈 Análisis de Aforos (Semanal / Mensual / Anual)")
+    st.markdown("## 📈 Análisis de Aforos")
 
     # --- Selección de modo ---
     modo = st.radio(
