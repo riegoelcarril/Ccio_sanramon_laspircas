@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import streamlit as st
 import pandas as pd
 import requests
@@ -21,7 +22,6 @@ from reportlab.platypus import Image as RLImage, Table as RLTable
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib import colors
 from reportlab.lib.units import mm
-from reportlab.lib.utils import ImageReader
 
 # ========= LOGO =========
 LOGO_PATH = "Logo-SRP-01.png"  # ajustá la ruta si está en /assets/...
@@ -36,7 +36,7 @@ def _logo_base64(path: str):
 # 1) CONFIGURACIÓN
 st.set_page_config(page_title="Consorcio San Ramón - Las Pircas", layout="wide", initial_sidebar_state="expanded")
 
-# 2) ESTILOS (IMPORTANTE: <style> REAL, NO ESCAPADO)
+# 2) ESTILOS (HTML real)
 st.markdown("""
 <style>
     .titulo-responsive {
@@ -52,7 +52,6 @@ st.markdown("""
         background: white; padding: 10px; border-radius: 8px; border: 1px solid #ddd; margin-bottom: 5px;
         border-left: 5px solid #1E3A8A;
     }
-    /* Para encuadrar el logo cuando se usa Opción A */
     .logo-chip {
         background: #ffffff;
         border-radius: 8px;
@@ -63,6 +62,72 @@ st.markdown("""
     .leaflet-interactive { cursor: pointer !important; }
 </style>
 """, unsafe_allow_html=True)
+
+st.markdown("""
+<style>
+/* Reduce espacio arriba del tab */
+section[data-testid="stSidebarContent"] { padding-top: 1rem !important; }
+div[data-testid="stTabs"] button { margin-top: 0 !important; }
+
+/* Reduce espacio dentro del tab principal */
+div.block-container {
+    padding-top: 0.5rem !important;
+}
+
+/* Compacta markdown y títulos */
+h2, h3 {
+    margin-top: 0.2rem !important;
+    margin-bottom: 0.6rem !important;
+}
+
+/* Compactar distance entre widgets */
+.stRadio > div { 
+    margin-top: -10px !important;
+}
+</style>
+""", unsafe_allow_html=True)
+
+
+st.markdown("""
+<style>
+
+    /* 1) Unificar tipografía de todos los títulos (h1, h2, h3) */
+    h1, h2, h3, .stMarkdown h1, .stMarkdown h2, .stMarkdown h3 {
+        font-family: "Segoe UI", Roboto, sans-serif !important;
+        font-size: 1.35rem !important;      /* tamaño coherente */
+        line-height: 1.25 !important;
+        font-weight: 700 !important;
+        margin-top: 0.2rem !important;
+        margin-bottom: 0.7rem !important;
+        padding: 0 !important;
+    }
+
+    /* 2) Neutralizar el estilo gigante que tenías en .titulo-responsive */
+    .titulo-responsive {
+        font-size: 1.35rem !important;
+        line-height: 1.25 !important;
+        margin-top: 0.5rem !important;
+        margin-bottom: 0.8rem !important;
+    }
+
+    /* 3) Reducir padding global en la parte superior del contenido */
+    .block-container {
+        padding-top: 0.4rem !important;
+    }
+
+    /* 4) Compactar radio buttons y columnas (antes generaban espacio extra) */
+    .stRadio > div {
+        margin-top: -5px !important;
+    }
+
+    /* 5) Evitar espacios grandes provocados por columnas al inicio del tab */
+    .stColumn {
+        padding-top: 0 !important;
+    }
+
+</style>
+""", unsafe_allow_html=True)
+
 
 # --- OPTIMIZACIÓN: Cache de GeoJSON locales ---
 @st.cache_data
@@ -122,32 +187,28 @@ def _fmt_int_or_blank(x):
         return str(x) if x is not None else ""
 
 def generar_pdf_reporte_datos(df_tab: pd.DataFrame, modo: str, inicio: pd.Timestamp, fin: pd.Timestamp) -> bytes:
+    """Versión ajustada: 1 sola columna de Hora y 1 sola de Caudal (l/s)."""
     titulo = "Aforos - Reporte " + ("Diario" if modo == "Día" else "Semanal")
     if modo == "Día":
         subtitulo = f"Fecha: {inicio.strftime('%d/%m/%Y')}"
     else:
         subtitulo = f"Semana: {inicio.strftime('%d/%m/%Y')} a {(fin - pd.Timedelta(days=1)).strftime('%d/%m/%Y')}"
 
-    core_cols = ["Orden", "Aforador", "Fecha"]
-    pairs = []
-    for i in [1, 2, 3]:
-        if f"Hora_{i}" in df_tab.columns and f"Caudal_{i} (l/s)" in df_tab.columns:
-            pairs.append((f"Hora_{i}", f"Caudal_{i} (l/s)"))
-
-    headers = core_cols[:]
-    for _ in pairs:
-        headers += ["Hora", "Caudal (l/s)"]
-
+    headers = ["Orden", "Aforador", "Fecha", "Hora", "Caudal (l/s)"]
     data = [headers]
+
     lecturas_totales = 0
     for _, row in df_tab.iterrows():
-        lecturas_totales += sum(
-            1 for _, c in pairs if pd.notna(row.get(c)) and str(row.get(c)).strip() != ""
-        )
-        fila = [row.get("Orden", ""), row.get("Aforador", ""), row.get("Fecha", "")]
-        for h_col, c_col in pairs:
-            fila.append(row.get(h_col, "") or "")
-            fila.append(_fmt_int_or_blank(row.get(c_col, "")))
+        caudal_val = row.get("Caudal (l/s)", "")
+        if pd.notna(caudal_val) and str(caudal_val).strip() != "":
+            lecturas_totales += 1
+        fila = [
+            row.get("Orden", ""),
+            row.get("Aforador", ""),
+            row.get("Fecha", ""),
+            row.get("Hora", "") or "",
+            _fmt_int_or_blank(caudal_val),
+        ]
         data.append(fila)
 
     buf = BytesIO()
@@ -208,9 +269,7 @@ def generar_pdf_reporte_datos(df_tab: pd.DataFrame, modo: str, inicio: pd.Timest
         elems.append(HRFlowable(width="100%", thickness=0.8, color=colors.Color(0.12, 0.22, 0.54), lineCap='round', spaceBefore=2, spaceAfter=6))
 
     table = Table(data, repeatRows=1)
-    widths = [18*mm, 68*mm, 24*mm]
-    for _ in pairs: widths += [20*mm, 26*mm]
-    table._argW = widths
+    table._argW = [18*mm, 80*mm, 24*mm, 20*mm, 26*mm]
 
     table.setStyle(TableStyle([
         ("BACKGROUND", (0,0), (-1,0), colors.Color(0.12, 0.22, 0.54)),
@@ -219,9 +278,10 @@ def generar_pdf_reporte_datos(df_tab: pd.DataFrame, modo: str, inicio: pd.Timest
         ("FONTNAME", (0,0), (-1,0), "Helvetica-Bold"),
         ("FONTSIZE", (0,0), (-1,0), 10),
 
-        ("ALIGN", (0,1), (0,-1), "RIGHT"),
-        ("ALIGN", (2,1), (2,-1), "CENTER"),
-        ("ALIGN", (3,1), (-1,-1), "CENTER"),
+        ("ALIGN", (0,1), (0,-1), "RIGHT"),   # Orden
+        ("ALIGN", (2,1), (2,-1), "CENTER"),  # Fecha
+        ("ALIGN", (3,1), (3,-1), "CENTER"),  # Hora
+        ("ALIGN", (4,1), (4,-1), "RIGHT"),   # Caudal
 
         ("FONTSIZE", (0,1), (-1,-1), 9),
         ("BOTTOMPADDING", (0,0), (-1,0), 8),
@@ -558,6 +618,10 @@ if "_clear_once" not in st.session_state:
 df_historial, df_maestro = cargar_datos_kobo()
 df_pluv_meta, df_pluv_pp = cargar_pluviometros_INTAlike()
 
+# Lista de aforadores (DEBE IR AQUÍ)
+aforadores_list = sorted(df_maestro["Aforador"].unique())
+
+
 # 4) TÍTULO
 TITLE_TEXT = "Gestión de Aforos"
 
@@ -587,6 +651,27 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+
+st.markdown("""
+<style>
+
+    /* ------------------------------
+       TÍTULO PRINCIPAL (GRANDE)
+       ------------------------------ */
+    .titulo-responsive {
+        font-size: 2.0rem !important;     /* << Ajustá acá si querés más grande */
+        line-height: 1.2 !important;
+        font-weight: 800 !important;
+        text-align: center !important;
+        margin-top: 0.8rem !important;
+        margin-bottom: 1.2rem !important;
+        color: #1E3A8A !important;
+    }
+
+</style>
+""", unsafe_allow_html=True)
+
+
 st.markdown(f'<div class="titulo-responsive"><span class="emoji">🌊</span>{TITLE_TEXT}</div>', unsafe_allow_html=True)
 
 if df_maestro.empty:
@@ -601,6 +686,37 @@ with st.sidebar:
     if os.path.exists(LOGO_PATH):
         st.image(LOGO_PATH, use_container_width=True)
         st.markdown("<hr>", unsafe_allow_html=True)
+
+
+
+# --- Selección automática de un aforador válido para SEMANAL ---
+hoy = date.today()
+inicio_auto, fin_auto = _semana_bounds(hoy)
+
+df_hist_tmp = df_historial[
+    (df_historial["fecha_dt"] >= inicio_auto) &
+    (df_historial["fecha_dt"] < fin_auto)
+]
+
+aforadores_con_datos = sorted(df_hist_tmp["af_actual"].unique())
+
+if len(aforadores_con_datos) > 0:
+    primer_af_id = aforadores_con_datos[0]
+    fila = df_maestro[df_maestro["id_aforador"] == primer_af_id]
+    if not fila.empty:
+        af_por_defecto = fila["Aforador"].iloc[0]
+    else:
+        af_por_defecto = aforadores_list[0]
+else:
+    af_por_defecto = aforadores_list[0]
+
+if "SEM_af_principal" not in st.session_state:
+    st.session_state["SEM_af_principal"] = af_por_defecto
+    st.session_state["SEM_initialized"] = True
+
+
+
+
 
 # ===================
 # PESTAÑAS: MAPA / DATOS / ANALISIS
@@ -837,11 +953,11 @@ with tab_mapa:
                     area_ha = 0.0
                 st.subheader(f"🚜 Parcela: {p.get('finca', 'S/N')}")
                 st.markdown(f"- **Catastro:** {p.get('catastro', 'N/A')}\n- **Área:** {area_ha} Ha")
-
         else:
             st.info("💡 Haz clic en un elemento del mapa.")
+
 # ===================
-# TAB: DATOS (listado rápido)
+# TAB: DATOS (listado rápido) — 1 lectura/día por aforador
 # ===================
 with tab_datos:
     st.markdown("### 📄 Datos de aforadores")
@@ -864,6 +980,7 @@ with tab_datos:
         fin = inicio + pd.Timedelta(days=1)
         subt = f"📅 Día: {inicio.strftime('%d/%m/%Y')}"
     else:
+        # Semana “móvil” de 7 días que termina en fecha_sel (incluida)
         fin = pd.Timestamp(fecha_sel) + pd.Timedelta(days=1)
         inicio = pd.Timestamp(fecha_sel) - pd.Timedelta(days=6)
         subt = f"📅 Semana: {inicio.strftime('%d/%m/%Y')} a {(fin - pd.Timedelta(days=1)).strftime('%d/%m/%Y')}"
@@ -894,6 +1011,7 @@ with tab_datos:
     )
 
     if modo == "Día":
+        # Para cada aforador, tomamos la ÚLTIMA (más reciente) lectura de ese día
         df_dia_sorted = df_rango.sort_values('fecha_dt', ascending=True)
         fecha_unica_grilla = inicio.strftime('%d/%m/%Y')
 
@@ -903,22 +1021,23 @@ with tab_datos:
             orden_val = m.get(col_orden, np.inf)
 
             rows_af = df_dia_sorted[df_dia_sorted['af_actual'] == af_id]
-            rows_af = rows_af.tail(3).sort_values('fecha_dt', ascending=True).copy()
+            if rows_af.empty:
+                # Si preferís omitir aforadores sin dato del día, quitá este append.
+                
+                continue
 
-            horas = list(rows_af['hora_format']) + ["", "", ""]
-            caudales = list(rows_af['caudal']) + ["", "", ""]
-
+            # Última lectura del día (la más reciente)
+            r = rows_af.iloc[-1]
             filas.append({
                 "Orden": orden_val,
                 "Aforador": nombre,
                 "Fecha": fecha_unica_grilla,
-                "Hora_1": horas[0], "Caudal_1 (l/s)": caudales[0],
-                "Hora_2": horas[1], "Caudal_2 (l/s)": caudales[1],
-                "Hora_3": horas[2], "Caudal_3 (l/s)": caudales[2],
-                "_Fecha_dia": pd.Timestamp(fecha_sel)
+                "Hora": r.get("hora_format", ""),
+                "Caudal (l/s)": pd.to_numeric(r.get("caudal", np.nan), errors="coerce")
             })
 
     else:
+        # Para SEMANA: por cada día con dato y por cada aforador, quedarnos SOLO con la última lectura de ese día
         if not df_rango.empty:
             df_rango['fecha_dia'] = df_rango['fecha_dt'].dt.normalize()
 
@@ -931,27 +1050,28 @@ with tab_datos:
             if df_af.empty:
                 continue
 
-            dias = sorted(df_af['fecha_dia'].dropna().unique(), reverse=True)
-            for d0 in dias:
-                df_day = df_af[df_af['fecha_dia'] == d0].sort_values('fecha_dt', ascending=True).copy()
-                df_day = df_day.tail(3).sort_values('fecha_dt', ascending=True)
+            # 1) ordenar por fecha_dt asc
+            df_af = df_af.sort_values('fecha_dt', ascending=True)
+            # 2) quedarnos con la última por fecha_dia (más reciente)
+            idx_last_by_day = df_af.groupby('fecha_dia')['fecha_dt'].idxmax()
+            df_last = df_af.loc[idx_last_by_day].sort_values('fecha_dt', ascending=False)
 
-                horas = list(df_day['hora_format']) + ["", "", ""]
-                caudales = list(df_day['caudal']) + ["", "", ""]
-
+            for _, r in df_last.iterrows():
                 filas.append({
                     "Orden": orden_val,
                     "Aforador": nombre,
-                    "Fecha": pd.Timestamp(d0).strftime('%d/%m/%Y'),
-                    "Hora_1": horas[0], "Caudal_1 (l/s)": caudales[0],
-                    "Hora_2": horas[1], "Caudal_2 (l/s)": caudales[1],
-                    "Hora_3": horas[2], "Caudal_3 (l/s)": caudales[2],
-                    "_Fecha_dia": pd.Timestamp(d0)
+                    "Fecha": pd.Timestamp(r['fecha_dia']).strftime('%d/%m/%Y'),
+                    "Hora": r.get("hora_format", ""),
+                    "Caudal (l/s)": pd.to_numeric(r.get("caudal", np.nan), errors="coerce"),
+                    "_Fecha_dia": r['fecha_dia']  # para ordenar
                 })
 
     df_tab = pd.DataFrame(filas)
 
     if not df_tab.empty:
+        # Orden final: por Orden (asc), y dentro por fecha (desc)
+        if "_Fecha_dia" not in df_tab.columns:
+            df_tab["_Fecha_dia"] = inicio  # para vista Día
         df_tab = df_tab.sort_values(
             by=["Orden", "_Fecha_dia"],
             ascending=[True, False],
@@ -959,36 +1079,17 @@ with tab_datos:
         ).drop(columns=["_Fecha_dia"], errors='ignore')
 
     if not df_tab.empty:
-        for col in ["Caudal_1 (l/s)", "Caudal_2 (l/s)", "Caudal_3 (l/s)"]:
-            if col in df_tab.columns:
-                df_tab[col] = pd.to_numeric(df_tab[col], errors="coerce")
-
-        column_order = [
-            "Orden", "Aforador", "Fecha",
-            "Hora_1", "Caudal_1 (l/s)",
-            "Hora_2", "Caudal_2 (l/s)",
-            "Hora_3", "Caudal_3 (l/s)"
-        ]
-        column_order = [c for c in column_order if c in df_tab.columns]
-
         st.dataframe(
             df_tab,
             hide_index=True,
             use_container_width=True,
-            column_order=column_order,
+            column_order=["Orden", "Aforador", "Fecha", "Hora", "Caudal (l/s)"],
             column_config={
                 "Orden": st.column_config.NumberColumn("Orden", width="small"),
                 "Aforador": st.column_config.TextColumn("Aforador", width="large"),
                 "Fecha": st.column_config.TextColumn("Fecha", width=110),
-
-                "Hora_1": st.column_config.TextColumn("Hora", width=90),
-                "Caudal_1 (l/s)": st.column_config.NumberColumn("Caudal (l/s)", format="%.0f", width=120),
-
-                "Hora_2": st.column_config.TextColumn("Hora", width=90),
-                "Caudal_2 (l/s)": st.column_config.NumberColumn("Caudal (l/s)", format="%.0f", width=120),
-
-                "Hora_3": st.column_config.TextColumn("Hora", width=90),
-                "Caudal_3 (l/s)": st.column_config.NumberColumn("Caudal (l/s)", format="%.0f", width=120),
+                "Hora": st.column_config.TextColumn("Hora", width=90),
+                "Caudal (l/s)": st.column_config.NumberColumn("Caudal (l/s)", format="%.0f", width=120),
             }
         )
 
@@ -1019,160 +1120,337 @@ with tab_datos:
             use_container_width=True
         )
 
+
 # ===================
-# TAB: ANÁLISIS (sin cruce de lluvias, sin alertas)
+# TAB: ANÁLISIS (UNIFICADO - VERSIÓN CORREGIDA)
 # ===================
 with tab_analisis:
-    st.markdown("### 📊 Análisis y gráficos")
 
-    # Tabs (sin dashboard mensual)
-    sub_sem, sub_comp = st.tabs(["📅 Semanal (1 aforador)", "🟰 Comparación (2 aforadores)"])
+    st.markdown("## 📈 Análisis de Aforos (Semanal / Mensual / Anual)")
 
-    # -----------------------
-    # SUBTAB: SEMANAL (1 aforador) — SIN lluvia, SIN alertas
-    # -----------------------
-    with sub_sem:
-        colA, colB = st.columns([1.2, 1])
-        aforadores_list = sorted(df_maestro["Aforador"].unique())
-        with colA:
-            af_sel = st.selectbox("Aforador", aforadores_list, index=0, key="anal_aforador")
-        with colB:
-            fecha_base = st.date_input("Semana a analizar", value=date.today(), format="DD/MM/YYYY", key="anal_semana")
+    # --- Selección de modo ---
+    modo = st.radio(
+        "Tipo de análisis:",
+        ["Semanal", "Mensual", "Anual"],
+        horizontal=True,
+        key="AN_mode"
+    )
 
-        inicio_sem, fin_sem = _semana_bounds(fecha_base)
-        st.caption(f"📅 Semana: {inicio_sem.strftime('%d/%m/%Y')} → {(fin_sem - pd.Timedelta(days=1)).strftime('%d/%m/%Y')}")
+    # --- Selectores generales ---
+    colA, colB = st.columns(2)
+    with colA:
+        af_principal = st.selectbox(
+            "Aforador principal",
+            aforadores_list,
+            key="AN_af_principal"
+        )
+    with colB:
+        af_sec = st.selectbox(
+            "Comparar con:",
+            ["(Ninguno)"] + [a for a in aforadores_list if a != af_principal],
+            key="AN_af_sec"
+        )
 
-        if df_historial.empty:
-            st.info("Sin historial de aforos.")
+    # Obtener ID
+    af_principal_id = df_maestro.loc[
+        df_maestro["Aforador"] == af_principal, "id_aforador"
+    ].iloc[0]
+
+    # Filtrar historial del principal
+    df_af = df_historial[df_historial["af_actual"] == af_principal_id].copy()
+    if df_af.empty:
+        st.warning("El aforador principal no tiene datos cargados.")
+        st.empty()
+        st.stop()
+
+    # ==================================================
+    #               ANÁLISIS SEMANAL
+    # ==================================================
+    if modo == "Semanal":
+
+        fecha_base_sem = st.date_input(
+            "Elegí una fecha dentro de la semana:",
+            value=date.today(),
+            format="DD/MM/YYYY",
+            key="AN_fecha_sem"
+        )
+
+        inicio_sem, fin_sem = _semana_bounds(fecha_base_sem)
+        st.caption(f"📅 Semana: {inicio_sem.strftime('%d/%m')} al {(fin_sem - pd.Timedelta(days=1)).strftime('%d/%m')}")
+
+        def cargar_semanal(nombre):
+            af_id = df_maestro.loc[df_maestro["Aforador"] == nombre, "id_aforador"].iloc[0]
+            df_s = df_historial[
+                (df_historial["af_actual"] == af_id) &
+                (df_historial["fecha_dt"] >= inicio_sem) &
+                (df_historial["fecha_dt"] < fin_sem)
+            ].copy()
+
+            if df_s.empty:
+                return None
+
+            df_s = df_s.sort_values("fecha_dt")
+            df_s["fecha_dia"] = df_s["fecha_dt"].dt.normalize()
+            idx_last = df_s.groupby("fecha_dia")["fecha_dt"].idxmax()
+            df_d = df_s.loc[idx_last, ["fecha_dia", "caudal"]].copy()
+            df_d["caudal"] = pd.to_numeric(df_d["caudal"], errors="coerce")
+
+            dias_es = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"]
+            df_d["Dia"] = df_d["fecha_dia"].dt.weekday.map(lambda x: dias_es[x]) + " " + df_d["fecha_dia"].dt.strftime("%d/%m")
+
+            return df_d[["Dia", "caudal"]]
+
+        df_A = cargar_semanal(af_principal)
+        if df_A is None:
+            st.info("El aforador principal no tiene datos esta semana.")
+            st.empty()
+            st.stop()
+
+        comparar = af_sec != "(Ninguno)"
+        if comparar:
+            df_B = cargar_semanal(af_sec)
+            if df_B is None:
+                st.warning("El aforador secundario no tiene datos esta semana.")
+                comparar = False
+
+        # --- TABLA ---
+        st.subheader("📄 Lecturas semanales (1 por día)")
+        if comparar:
+            df_sem = df_A.merge(
+                df_B,
+                on="Dia",
+                how="outer",
+                suffixes=(f" ({af_principal})", f" ({af_sec})")
+            )
         else:
-            af_id_series = df_maestro.loc[df_maestro["Aforador"] == af_sel, "id_aforador"]
-            if af_id_series.empty:
-                st.warning("No se encontró el ID del aforador seleccionado.")
-            else:
-                af_id = af_id_series.iloc[0]
-                df_sem = df_historial[
-                    (df_historial["af_actual"] == af_id) &
-                    (df_historial["fecha_dt"] >= inicio_sem) &
-                    (df_historial["fecha_dt"] < fin_sem)
-                ].sort_values("fecha_dt").copy()
+            df_sem = df_A.rename(columns={"caudal": f"{af_principal} (l/s)"})
 
-                st.subheader("📄 Datos de la semana")
-                if df_sem.empty:
-                    st.info("No hay datos en la semana seleccionada.")
-                else:
-                    df_sem_view = df_sem[["fecha_format", "hora_format", "caudal"]].copy()
-                    df_sem_view["caudal"] = pd.to_numeric(df_sem_view["caudal"], errors="coerce")
-                    st.dataframe(
-                        df_sem_view,
-                        hide_index=True,
-                        use_container_width=True,
-                        column_order=["fecha_format", "hora_format", "caudal"],
-                        column_config={
-                            "fecha_format": st.column_config.TextColumn("Fecha", width=110),
-                            "hora_format": st.column_config.TextColumn("Hora", width=90),
-                            "caudal": st.column_config.NumberColumn("Caudal (l/s)", format="%.0f", width=120),
-                        }
-                    )
+        st.dataframe(df_sem, hide_index=True, use_container_width=True)
 
-                    csv_sem = df_sem.to_csv(index=False).encode("utf-8")
-                    st.download_button(
-                        "⬇️ Descargar CSV semanal",
-                        data=csv_sem,
-                        file_name=f"analisis_{af_sel}_{inicio_sem.strftime('%Y%m%d')}.csv",
-                        mime="text/csv"
-                    )
+        st.download_button(
+            "⬇️ Descargar CSV semanal",
+            data=df_sem.to_csv(index=False).encode("utf-8"),
+            file_name=f"analisis_semanal_{inicio_sem.strftime('%Y%m%d')}.csv",
+            mime="text/csv"
+        )
 
-                    st.subheader("📈 Caudal vs tiempo (semanal)")
-                    chart_df = df_sem[["fecha_dt", "caudal"]].rename(columns={"fecha_dt":"FechaHora","caudal":"Caudal (l/s)"})
-                    st.line_chart(chart_df.set_index("FechaHora"))
+        # --- GRÁFICO ---
+        st.subheader("📊 Caudal por día")
+        df_long = df_sem.melt(
+            id_vars="Dia",
+            value_vars=[c for c in df_sem.columns if c != "Dia"],
+            var_name="Aforador",
+            value_name="Caudal"
+        )
 
-                    st.subheader("📊 Resumen diario")
-                    df_sem["dia"] = df_sem["fecha_dt"].dt.strftime("%d/%m")
-                    df_dias = df_sem.groupby("dia").agg(
-                        promedio=("caudal", "mean"),
-                        maximo=("caudal", "max"),
-                        minimo=("caudal", "min"),
-                        lecturas=("caudal", "count"),
-                        acumulado=("caudal", "sum")
-                    ).reset_index()
+        base = alt.Chart(df_long).encode(
+            x=alt.X("Dia:N", sort=df_sem["Dia"].tolist(), axis=alt.Axis(labelAngle=0)),
+            y="Caudal:Q",
+            color="Aforador:N"
+        )
 
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        st.markdown("**Promedio diario (l/s)**")
-                        st.bar_chart(df_dias.set_index("dia")["promedio"])
-                    with col2:
-                        st.markdown("**Acumulado de lecturas (l/s)**")
-                        st.bar_chart(df_dias.set_index("dia")["acumulado"])
+        chart = (
+            base.mark_bar().encode(xOffset="Aforador:N") +
+            base.mark_text(dy=-10, size=12).encode(text=alt.Text("Caudal:Q", format=".0f"))
+        )
 
-                    # 🔕 Sin alertas, sin cruce de lluvias
+        st.altair_chart(chart, use_container_width=True)
 
-    # -----------------------
-    # SUBTAB: COMPARACIÓN (2 aforadores)
-    # -----------------------
-    with sub_comp:
-        st.markdown("### 🟰 Comparación semanal entre 2 aforadores")
+    # ==================================================
+    #               ANÁLISIS MENSUAL
+    # ==================================================
+    elif modo == "Mensual":
 
-        col1, col2, col3 = st.columns([1.2, 1.2, 1])
-        afs_all = sorted(df_maestro["Aforador"].unique())
-
+        col1, col2 = st.columns(2)
         with col1:
-            afA = st.selectbox("Aforador A", afs_all, key="cmp_a")
-
+            año_sel = st.number_input(
+                "Año",
+                min_value=2020,
+                max_value=2035,
+                value=date.today().year,
+                key="AN_año_m"
+            )
         with col2:
-            afs_B = [a for a in afs_all if a != afA]
-            afB = st.selectbox("Aforador B (no puede ser el mismo)", afs_B, key="cmp_b")
+            mes_sel = st.selectbox(
+                "Mes",
+                list(range(1, 13)),
+                index=date.today().month - 1,
+                key="AN_mes",
+                format_func=lambda m: [
+                    "Enero","Febrero","Marzo","Abril","Mayo","Junio",
+                    "Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"
+                ][m-1]
+            )
 
-        with col3:
-            fecha_cmp = st.date_input("Semana", value=date.today(), format="DD/MM/YYYY", key="cmp_sem")
+        ini = pd.Timestamp(year=año_sel, month=mes_sel, day=1)
+        fin = (ini + pd.offsets.MonthEnd(1)) + pd.Timedelta(days=1)
 
-        ini_cmp, fin_cmp = _semana_bounds(fecha_cmp)
-        st.caption(f"📅 Semana: {ini_cmp.strftime('%d/%m/%Y')} → {(fin_cmp - pd.Timedelta(days=1)).strftime('%d/%m/%Y')}")
+        st.caption(f"📅 {ini.strftime('%d/%m/%Y')} → {(fin - pd.Timedelta(days=1)).strftime('%d/%m/%Y')}")
 
-        if df_historial.empty:
-            st.info("Sin historial de aforos.")
+        def cargar_mensual(nombre):
+            af_id = df_maestro.loc[df_maestro["Aforador"] == nombre, "id_aforador"].iloc[0]
+            df_m = df_historial[
+                (df_historial["af_actual"] == af_id) &
+                (df_historial["fecha_dt"] >= ini) &
+                (df_historial["fecha_dt"] < fin)
+            ].copy()
+            if df_m.empty:
+                return None
+
+            df_m = df_m.sort_values("fecha_dt")
+            df_m["fecha_dia"] = df_m["fecha_dt"].dt.normalize()
+            idx_last = df_m.groupby("fecha_dia")["fecha_dt"].idxmax()
+            df_d = df_m.loc[idx_last, ["fecha_dia","caudal"]].copy()
+
+            df_d["week_start"] = df_d["fecha_dia"] - pd.to_timedelta(df_d["fecha_dia"].dt.weekday, unit="D")
+            df_d["week_end"]   = df_d["week_start"] + pd.Timedelta(days=6)
+            df_d["SemanaLabel"] = df_d.apply(
+                lambda r: f"{max(r['week_start'], ini).day} al {min(r['week_end'], fin - pd.Timedelta(days=1)).day} {r['week_start'].strftime('%b')}",
+                axis=1
+            )
+
+            df_sem = df_d.groupby(["week_start","SemanaLabel"])["caudal"].mean().reset_index()
+            return df_sem.rename(columns={"caudal": f"{nombre} (l/s)"})
+
+        df_A = cargar_mensual(af_principal)
+        if df_A is None:
+            st.info("No hay datos este mes.")
+            st.empty()
+            st.stop()
+
+        comparar = af_sec != "(Ninguno)"
+        if comparar:
+            df_B = cargar_mensual(af_sec)
+            if df_B is None:
+                comparar = False
+
+        if comparar:
+            df_sem_prom = df_A.merge(df_B, on=["week_start","SemanaLabel"], how="outer")
         else:
-            def serie_af(af_name, alias):
-                s = df_maestro.loc[df_maestro["Aforador"] == af_name, "id_aforador"]
-                if s.empty:
-                    return pd.DataFrame(columns=["fecha_dt", alias])
-                af_id = s.iloc[0]
-                d = df_historial[
-                    (df_historial["af_actual"] == af_id) &
-                    (df_historial["fecha_dt"] >= ini_cmp) &
-                    (df_historial["fecha_dt"] < fin_cmp)
-                ][["fecha_dt", "caudal"]].copy()
-                d = d.sort_values("fecha_dt").rename(columns={"caudal": alias})
-                return d
+            df_sem_prom = df_A.copy()
 
-            sa = serie_af(afA, "A")
-            sb = serie_af(afB, "B")
+        df_tabla = df_sem_prom.rename(columns={"SemanaLabel": "Semana"}).drop(columns=["week_start"])
 
-            if sa.empty and sb.empty:
-                st.info("No hay datos para esa semana en ninguno de los dos aforadores.")
-            else:
-                df_cmp = pd.merge(sa, sb, on="fecha_dt", how="outer").sort_values("fecha_dt")
-                if "A" not in df_cmp.columns: df_cmp["A"] = np.nan
-                if "B" not in df_cmp.columns: df_cmp["B"] = np.nan
+        st.subheader("📄 Promedio semanal del mes")
+        st.dataframe(df_tabla, hide_index=True, use_container_width=True)
 
-                st.subheader(f"📈 {afA} vs {afB} (semanal)")
-                st.line_chart(df_cmp.set_index("fecha_dt")[["A", "B"]])
+        st.download_button(
+            "⬇️ Descargar CSV mensual",
+            data=df_tabla.to_csv(index=False).encode("utf-8"),
+            file_name=f"analisis_mensual_{año_sel}_{mes_sel}.csv",
+            mime="text/csv"
+        )
 
-                colm1, colm2, colm3, colm4 = st.columns(4)
-                colA = pd.to_numeric(df_cmp["A"], errors="coerce")
-                colB = pd.to_numeric(df_cmp["B"], errors="coerce")
-                with colm1:
-                    st.metric(f"Promedio {afA}", f"{colA.mean():.1f} l/s" if colA.notna().any() else "—")
-                with colm2:
-                    st.metric(f"Máximo {afA}", f"{colA.max():.1f} l/s" if colA.notna().any() else "—")
-                with colm3:
-                    st.metric(f"Promedio {afB}", f"{colB.mean():.1f} l/s" if colB.notna().any() else "—")
-                with colm4:
-                    st.metric(f"Máximo {afB}", f"{colB.max():.1f} l/s" if colB.notna().any() else "—")
+        st.subheader("📊 Promedio semanal (l/s)")
+        df_long = df_tabla.melt(id_vars="Semana", var_name="Aforador", value_name="Caudal")
 
-                df_out = df_cmp.rename(columns={"A": afA, "B": afB})
-                st.download_button(
-                    "⬇️ Descargar CSV comparación",
-                    data=df_out.to_csv(index=False).encode("utf-8"),
-                    file_name=f"comparacion_{afA}_{afB}_{ini_cmp.strftime('%Y%m%d')}.csv",
-                    mime="text/csv"
-                )
+        chart = (
+            alt.Chart(df_long).mark_bar().encode(
+                x=alt.X("Semana:N", axis=alt.Axis(labelAngle=0)),
+                y="Caudal:Q",
+                color="Aforador:N",
+                xOffset="Aforador:N"
+            )
+        ) + alt.Chart(df_long).mark_text(
+            dy=-10,
+            size=12
+        ).encode(
+            x="Semana:N",
+            y="Caudal:Q",
+            text=alt.Text("Caudal:Q", format=".0f"),
+            xOffset="Aforador:N"
+        )
+
+        st.altair_chart(chart, use_container_width=True)
+
+    # ==================================================
+    #               ANÁLISIS ANUAL
+    # ==================================================
+    else:
+
+        año_an = st.number_input(
+            "Año",
+            min_value=2020,
+            max_value=2035,
+            value=date.today().year,
+            key="AN_año_anu"
+        )
+
+        ini = pd.Timestamp(year=año_an, month=1, day=1)
+        fin = pd.Timestamp(year=año_an+1, month=1, day=1)
+
+        def cargar_anual(nombre):
+            af_id = df_maestro.loc[df_maestro["Aforador"] == nombre, "id_aforador"].iloc[0]
+            df_y = df_historial[
+                (df_historial["af_actual"] == af_id) &
+                (df_historial["fecha_dt"] >= ini) &
+                (df_historial["fecha_dt"] < fin)
+            ]
+            if df_y.empty:
+                return None
+
+            df_y["Mes"] = df_y["fecha_dt"].dt.month
+            return df_y.groupby("Mes")["caudal"].mean().reset_index().rename(
+                columns={"caudal": f"{nombre} (l/s)"}
+            )
+
+        df_A = cargar_anual(af_principal)
+        if df_A is None:
+            st.info("No hay datos este año.")
+            st.empty()
+            st.stop()
+
+        comparar = af_sec != "(Ninguno)"
+        if comparar:
+            df_B = cargar_anual(af_sec)
+            if df_B is None:
+                comparar = False
+
+        if comparar:
+            df_anual = df_A.merge(df_B, on="Mes", how="outer")
+        else:
+            df_anual = df_A.copy()
+
+        df_anual["MesLabel"] = df_anual["Mes"].apply(
+            lambda x: ["Ene","Feb","Mar","Abr","May","Jun","Jul",
+                       "Ago","Sep","Oct","Nov","Dic"][x-1]
+        )
+
+        df_anual = df_anual.drop(columns=["Mes"])
+
+        df_tabla_anual = df_anual.rename(columns={"MesLabel":"Mes"})[
+            ["Mes"] + [c for c in df_anual.columns if c.endswith("(l/s)")]
+        ]
+
+        st.subheader("📄 Promedio mensual del año")
+        st.dataframe(df_tabla_anual, hide_index=True, use_container_width=True)
+
+        st.download_button(
+            "⬇️ Descargar CSV anual",
+            data=df_tabla_anual.to_csv(index=False).encode("utf-8"),
+            file_name=f"analisis_anual_{año_an}.csv",
+            mime="text/csv"
+        )
+
+        st.subheader("📊 Promedio mensual (l/s)")
+        df_long = df_tabla_anual.melt(id_vars="Mes", var_name="Aforador", value_name="Caudal")
+
+        chart = (
+            alt.Chart(df_long).mark_bar().encode(
+                x=alt.X("Mes:N", sort=["Ene","Feb","Mar","Abr","May","Jun",
+                                       "Jul","Ago","Sep","Oct","Nov","Dic"]),
+                y="Caudal:Q",
+                color="Aforador:N",
+                xOffset="Aforador:N"
+            )
+        ) + alt.Chart(df_long).mark_text(
+            dy=-10,
+            size=12
+        ).encode(
+            x="Mes:N",
+            y="Caudal:Q",
+            text=alt.Text("Caudal:Q", format=".0f"),
+            xOffset="Aforador:N"
+        )
+
+        st.altair_chart(chart, use_container_width=True)
