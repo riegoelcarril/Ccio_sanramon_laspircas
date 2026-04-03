@@ -8,3 +8,4 @@ altair
 pyarrow
 reportlab
 Pillow
+openpyxl
