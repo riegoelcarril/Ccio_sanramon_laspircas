@@ -5,6 +5,7 @@ import requests
 import folium
 import json
 import os
+from io import BytesIO
 import numpy as np
 from base64 import b64encode
 from reportlab.lib.utils import ImageReader
@@ -49,7 +50,7 @@ st.markdown("""
         text-align: center; margin-bottom: 15px; font-weight: bold;
     }
     .metric-box {
-        background: white; padding: 10px; border-radius: 8px; border: 1px solid #ddd; margin-bottom: 5px;
+        background: white; color: #111827; padding: 10px; border-radius: 8px; border: 1px solid #ddd; margin-bottom: 5px;
         border-left: 5px solid #1E3A8A;
     }
     .logo-chip {
@@ -145,6 +146,142 @@ def obtener_geojson_local(ruta: str, tipo: str):
                 p['fid'] = p.get('fid', f"finca_{i}")
         return data
     return None
+
+
+#PDF generar_pdf_resumen_anual
+def generar_pdf_resumen_anual(df_anual: pd.DataFrame, año: int) -> bytes:
+    buf = BytesIO()
+
+    doc = SimpleDocTemplate(
+        buf,
+        pagesize=landscape(A4),
+        leftMargin=12*mm,
+        rightMargin=12*mm,
+        topMargin=12*mm,
+        bottomMargin=12*mm
+    )
+
+    styles = getSampleStyleSheet()
+    elems = []
+
+    # ======================================================
+    # ENCABEZADO (IGUAL A DIARIO / SEMANAL)
+    # ======================================================
+    titulo = "Aforos - Resumen Anual"
+    subtitulo = f"Año {año}"
+
+    try:
+        if os.path.exists(LOGO_PATH):
+            img_reader = ImageReader(LOGO_PATH)
+            iw, ih = img_reader.getSize()
+            target_h = 22 * mm
+            scale = target_h / ih
+            logo_w = iw * scale
+            logo_h = target_h
+
+            logo_flow = RLImage(LOGO_PATH, width=logo_w, height=logo_h)
+
+            header_tbl = RLTable(
+                data=[
+                    [logo_flow, Paragraph(f"<b>{titulo}</b>", styles["Title"])],
+                    ["", Paragraph(subtitulo, styles["Normal"])]
+                ],
+                colWidths=[logo_w + 6*mm, None]
+            )
+
+            header_tbl.setStyle(TableStyle([
+                ('SPAN', (0, 0), (0, 1)),
+                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                ('ALIGN', (0, 0), (0, 1), 'LEFT'),
+                ('LEFTPADDING', (0, 0), (-1, -1), 0),
+                ('RIGHTPADDING', (0, 0), (-1, -1), 6),
+                ('TOPPADDING', (0, 0), (-1, -1), 0),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
+            ]))
+
+            elems.append(header_tbl)
+        else:
+            elems.append(Paragraph(f"<b>{titulo}</b>", styles["Title"]))
+            elems.append(Paragraph(subtitulo, styles["Normal"]))
+
+        elems.append(Spacer(1, 4))
+        elems.append(HRFlowable(
+            width="100%",
+            thickness=0.8,
+            color=colors.Color(0.12, 0.22, 0.54),
+            lineCap='round',
+            spaceBefore=2,
+            spaceAfter=10
+        ))
+    except Exception:
+        elems.append(Paragraph(f"<b>{titulo}</b>", styles["Title"]))
+        elems.append(Paragraph(subtitulo, styles["Normal"]))
+        elems.append(Spacer(1, 6))
+
+    # ======================================================
+    # TABLA ANUAL
+    # ======================================================
+    columnas = [
+        "Orden", "Aforador",
+        "Ene","Feb","Mar","Abr","May","Jun",
+        "Jul","Ago","Sep","Oct","Nov","Dic"
+    ]
+
+    data = [columnas]
+
+    for _, row in df_anual.iterrows():
+        fila = []
+        for col in columnas:
+            val = row.get(col, None)
+            if col in ["Orden", "Aforador"]:
+                fila.append("" if pd.isna(val) else str(val))
+            else:
+                try:
+                    fila.append("" if pd.isna(val) else str(int(round(float(val)))))
+                except Exception:
+                    fila.append("")
+        data.append(fila)
+
+    col_widths = [14*mm, 52*mm] + [13*mm]*12
+
+
+    table = Table(data, colWidths=col_widths, repeatRows=1)
+
+    table.setStyle(TableStyle([
+        ("BACKGROUND", (0,0), (-1,0), colors.Color(0.12, 0.22, 0.54)),
+        ("TEXTCOLOR", (0,0), (-1,0), colors.white),
+        ("ALIGN", (0,0), (-1,0), "CENTER"),
+        ("FONTNAME", (0,0), (-1,0), "Helvetica-Bold"),
+        ("FONTSIZE", (0,0), (-1,0), 9),
+
+        ("ALIGN", (0,1), (0,-1), "RIGHT"),   # Orden
+        ("ALIGN", (1,1), (1,-1), "LEFT"),    # Aforador
+        ("ALIGN", (2,1), (-1,-1), "RIGHT"),  # Meses
+
+        ("FONTSIZE", (0,1), (-1,-1), 8),
+        ("ROWBACKGROUNDS", (0,1), (-1,-1),
+            [colors.whitesmoke, colors.Color(0.97,0.97,1.0)]
+        ),
+        ("GRID", (0,0), (-1,-1), 0.3, colors.grey),
+        ("TOPPADDING", (0,0), (-1,-1), 4),
+        ("BOTTOMPADDING", (0,0), (-1,-1), 4),
+    ]))
+
+    elems.append(table)
+    elems.append(Spacer(1, 6))
+
+    elems.append(Paragraph(
+        f"Generado: {pd.Timestamp.now().strftime('%d/%m/%Y %H:%M')}",
+        styles["Italic"]
+    ))
+
+    doc.build(elems)
+    pdf_bytes = buf.getvalue()
+    buf.close()
+    return pdf_bytes
+
+
+
 
 # --- HELPER: Parser robusto Fecha+Hora de Kobo ---
 def parse_datetime_kobo(fecha_s: pd.Series, hora_s: pd.Series) -> pd.Series:
@@ -303,6 +440,23 @@ def generar_pdf_reporte_datos(df_tab: pd.DataFrame, modo: str, inicio: pd.Timest
     buf.close()
     return pdf_bytes
 
+
+
+
+def fetch_all_kobo_data(url, headers):
+    resultados = []
+    next_url = url
+
+    while next_url:
+        r = requests.get(next_url, headers=headers, timeout=30)
+        r.raise_for_status()
+        data = r.json()
+        resultados.extend(data.get("results", []))
+        next_url = data.get("next")
+
+    return resultados
+    
+    
 # 3) CARGA DE DATOS (Kobo)
 @st.cache_data(ttl=1800)
 def cargar_datos_kobo():
@@ -312,10 +466,14 @@ def cargar_datos_kobo():
     TOKEN = st.secrets["AFORO_TOKEN"]
     HEADERS = {'Authorization': f'Token {TOKEN}'}
     try:
-        r1 = requests.get(URL_AFORO, headers=HEADERS, timeout=20)
+        #r1 = requests.get(URL_AFORO, headers=HEADERS, timeout=20)
         r2 = requests.get(URL_MAPA,  headers=HEADERS, timeout=20)
-        df_a = pd.DataFrame(r1.json().get('results', []))
+        #df_a = pd.DataFrame(r1.json().get('results', []))
         df_m = pd.DataFrame(r2.json().get('results', []))
+        
+        aforos = fetch_all_kobo_data(URL_AFORO, HEADERS)
+        df_a = pd.DataFrame(aforos)
+        
         if df_m.empty:
             return pd.DataFrame(), pd.DataFrame()
 
@@ -1002,170 +1160,162 @@ with tab_mapa:
         else:
             st.info("💡 Haz clic en un elemento del mapa.")
 
+
 # ===================
-# TAB: DATOS (listado rápido) — 1 lectura/día por aforador
+# TAB: DATOS
 # ===================
 with tab_datos:
+
     st.markdown("### 📄 Datos de aforadores")
-    col1, col2 = st.columns([1, 2])
-    with col1:
-        modo = st.radio("Ver por:", ["Día", "Semana"], horizontal=True, key="modo_datos")
-    with col2:
-        fecha_default = date.today()
-        if not df_historial.empty and pd.notna(df_historial['fecha_dt'].max()):
-            fmax = df_historial['fecha_dt']
-            if is_datetime64tz_dtype(getattr(fmax, "dtype", None)):
-                fmax = fmax.dt.tz_localize(None)
-            fecha_max = fmax.max()
-            if pd.notna(fecha_max):
-                fecha_default = fecha_max.date()
-        fecha_sel = st.date_input("Seleccioná fecha", value=fecha_default, format="DD/MM/YYYY", key="fecha_datos")
 
-    if modo == "Día":
-        inicio = pd.Timestamp(fecha_sel)
-        fin = inicio + pd.Timedelta(days=1)
-        subt = f"📅 Día: {inicio.strftime('%d/%m/%Y')}"
-    else:
-        # Semana “móvil” de 7 días que termina en fecha_sel (incluida)
-        fin = pd.Timestamp(fecha_sel) + pd.Timedelta(days=1)
-        inicio = pd.Timestamp(fecha_sel) - pd.Timedelta(days=6)
-        subt = f"📅 Semana: {inicio.strftime('%d/%m/%Y')} a {(fin - pd.Timedelta(days=1)).strftime('%d/%m/%Y')}"
-    st.caption(subt)
-
-    ser_dt = df_historial['fecha_dt']
-    if is_datetime64tz_dtype(getattr(ser_dt, "dtype", None)):
-        ser_dt = ser_dt.dt.tz_localize(None)
-
-    mask = (ser_dt >= inicio) & (ser_dt < fin)
-    df_rango = df_historial[mask].copy()
-
-    if 'Observaciones' not in df_rango.columns:
-        df_rango['Observaciones'] = ""
-
-    col_orden = next((c for c in df_maestro.columns if c.lower() == 'orden' or 'orden' in c.lower()), None)
-    if col_orden is None:
-        df_maestro['orden'] = np.inf
-        col_orden = 'orden'
-    df_maestro[col_orden] = pd.to_numeric(df_maestro[col_orden], errors='coerce')
-
-    filas = []
-
-    df_maestro_sorted = df_maestro.sort_values(
-        by=[col_orden],
-        ascending=[True],
-        na_position='last'
+    modo = st.radio(
+        "Ver por:",
+        ["Día", "Semana", "Mes/Año"],
+        horizontal=True,
+        key="modo_datos"
     )
 
-    if modo == "Día":
-        # Para cada aforador, tomamos la ÚLTIMA (más reciente) lectura de ese día
-        df_dia_sorted = df_rango.sort_values('fecha_dt', ascending=True)
-        fecha_unica_grilla = inicio.strftime('%d/%m/%Y')
+    if modo in ["Día", "Semana"]:
+        fecha_sel = st.date_input(
+            "Seleccioná fecha",
+            value=df_historial["fecha_dt"].max().date()
+        )
+    else:
+        año_sel = st.number_input("Año", 2020, 2035, date.today().year)
 
-        for _, m in df_maestro_sorted.iterrows():
-            af_id = m['id_aforador']
-            nombre = m.get('Aforador', '')
-            orden_val = m.get(col_orden, np.inf)
+    # ================= DÍA / SEMANA =================
+    if modo in ["Día", "Semana"]:
 
-            rows_af = df_dia_sorted[df_dia_sorted['af_actual'] == af_id]
-            if rows_af.empty:
-                # Si preferís omitir aforadores sin dato del día, quitá este append.
-                
-                continue
+        inicio = pd.Timestamp(fecha_sel)
+        fin = inicio + pd.Timedelta(days=1 if modo=="Día" else 7)
 
-            # Última lectura del día (la más reciente)
-            r = rows_af.iloc[-1]
-            filas.append({
-                "Orden": orden_val,
-                "Aforador": nombre,
-                "Fecha": fecha_unica_grilla,
-                "Hora": r.get("hora_format", ""),
-                "Caudal (l/s)": pd.to_numeric(r.get("caudal", np.nan), errors="coerce")
+        df_rango = df_historial[
+            (df_historial["fecha_dt"] >= inicio) &
+            (df_historial["fecha_dt"] < fin)
+        ]
+
+        if df_rango.empty:
+            st.info("No hay datos para el período seleccionado.")
+        else:
+            df_rango["fecha_dia"] = df_rango["fecha_dt"].dt.normalize()
+            df_last = df_rango.sort_values("fecha_dt").groupby(
+                ["af_actual","fecha_dia"]
+            ).tail(1)
+
+            df_tab = df_last.merge(
+                df_maestro[["id_aforador","Aforador","orden"]],
+                left_on="af_actual",
+                right_on="id_aforador"
+            )
+
+            df_tab = df_tab[["orden","Aforador","fecha_format","hora_format","caudal"]]
+            df_tab.columns = ["Orden","Aforador","Fecha","Hora","Caudal (l/s)"]
+
+            st.dataframe(df_tab, hide_index=True, use_container_width=True)
+
+            # XLS
+            buf = BytesIO()
+            df_tab.to_excel(buf, index=False)
+            buf.seek(0)
+            #st.download_button("⬇️ Descargar XLS", buf, "aforadores.xlsx")
+
+            # PDF
+            pdf = generar_pdf_reporte_datos(df_tab, modo, inicio, fin)
+            #st.download_button("⬇️ Descargar PDF", pdf, "reporte_aforos.pdf")
+            
+            
+            col_xls, col_pdf = st.columns([1, 2])
+
+            with col_xls:
+                st.download_button("⬇️ Descargar XLS", buf, "aforadores.xlsx")
+
+            with col_pdf:
+                st.download_button("⬇️ Descargar PDF", pdf, "reporte_aforos.pdf")
+
+
+    # ================= MES (ANUAL) =================
+    else:
+        ini = pd.Timestamp(year=año_sel, month=1, day=1)
+        fin = pd.Timestamp(year=año_sel+1, month=1, day=1)
+
+        df = df_historial[
+            (df_historial["fecha_dt"] >= ini) &
+            (df_historial["fecha_dt"] < fin)
+        ]
+
+        if df.empty:
+            st.info("No hay datos para ese año.")
+        else:
+            df["fecha_dia"] = df["fecha_dt"].dt.normalize()
+            df = df.sort_values("fecha_dt").groupby(
+                ["af_actual","fecha_dia"]
+            ).tail(1)
+
+            df["Mes"] = df["fecha_dia"].dt.month
+            df = df.groupby(["af_actual","Mes"])["caudal"].mean().reset_index()
+
+            df = df.pivot(index="af_actual", columns="Mes", values="caudal")
+
+            # asegurar los 12 meses aunque falten datos
+            df = df.reindex(columns=range(1, 13))
+
+            df = df.rename(columns={
+                1:"Ene", 2:"Feb", 3:"Mar", 4:"Abr", 5:"May", 6:"Jun",
+                7:"Jul", 8:"Ago", 9:"Sep", 10:"Oct", 11:"Nov", 12:"Dic"
             })
 
-    else:
-        # Para SEMANA: por cada día con dato y por cada aforador, quedarnos SOLO con la última lectura de ese día
-        if not df_rango.empty:
-            df_rango['fecha_dia'] = df_rango['fecha_dt'].dt.normalize()
 
-        for _, m in df_maestro_sorted.iterrows():
-            af_id = m['id_aforador']
-            nombre = m.get('Aforador', '')
-            orden_val = m.get(col_orden, np.inf)
+            
+            
+            df = df.merge(
+                df_maestro[["id_aforador","Aforador","orden"]],
+                left_index=True,
+                right_on="id_aforador"
+            ).sort_values("orden").drop(columns="id_aforador")
 
-            df_af = df_rango[df_rango['af_actual'] == af_id]
-            if df_af.empty:
-                continue
+            # ---- ORDENAR COLUMNAS (CLAVE) ----
+            meses_cols = ["Ene","Feb","Mar","Abr","May","Jun",
+                          "Jul","Ago","Sep","Oct","Nov","Dic"]
 
-            # 1) ordenar por fecha_dt asc
-            df_af = df_af.sort_values('fecha_dt', ascending=True)
-            # 2) quedarnos con la última por fecha_dia (más reciente)
-            idx_last_by_day = df_af.groupby('fecha_dia')['fecha_dt'].idxmax()
-            df_last = df_af.loc[idx_last_by_day].sort_values('fecha_dt', ascending=False)
+            df = df[["orden", "Aforador"] + meses_cols]
+            
+            
 
-            for _, r in df_last.iterrows():
-                filas.append({
-                    "Orden": orden_val,
-                    "Aforador": nombre,
-                    "Fecha": pd.Timestamp(r['fecha_dia']).strftime('%d/%m/%Y'),
-                    "Hora": r.get("hora_format", ""),
-                    "Caudal (l/s)": pd.to_numeric(r.get("caudal", np.nan), errors="coerce"),
-                    "_Fecha_dia": r['fecha_dia']  # para ordenar
-                })
+            st.dataframe(df.fillna(""), hide_index=True, use_container_width=True)
 
-    df_tab = pd.DataFrame(filas)
+            # XLS
+            buf = BytesIO()
+            df.fillna("").to_excel(buf, index=False)
+            buf.seek(0)
+            
 
-    if not df_tab.empty:
-        # Orden final: por Orden (asc), y dentro por fecha (desc)
-        if "_Fecha_dia" not in df_tab.columns:
-            df_tab["_Fecha_dia"] = inicio  # para vista Día
-        df_tab = df_tab.sort_values(
-            by=["Orden", "_Fecha_dia"],
-            ascending=[True, False],
-            na_position='last'
-        ).drop(columns=["_Fecha_dia"], errors='ignore')
+            # PDF anual
+            # PDF anual (mostrar Orden y ordenar por Orden)
+            df_pdf = df.rename(columns={"orden": "Orden"})
+            df_pdf = df_pdf.sort_values("Orden")
 
-    if not df_tab.empty:
-        st.dataframe(
-            df_tab,
-            hide_index=True,
-            use_container_width=True,
-            column_order=["Orden", "Aforador", "Fecha", "Hora", "Caudal (l/s)"],
-            column_config={
-                "Orden": st.column_config.NumberColumn("Orden", width="small"),
-                "Aforador": st.column_config.TextColumn("Aforador", width="large"),
-                "Fecha": st.column_config.TextColumn("Fecha", width=110),
-                "Hora": st.column_config.TextColumn("Hora", width=90),
-                "Caudal (l/s)": st.column_config.NumberColumn("Caudal (l/s)", format="%.0f", width=120),
-            }
-        )
+            pdf = generar_pdf_resumen_anual(df_pdf, año_sel)
+            
+            
+            col_xls, col_pdf = st.columns([1, 2])
 
-        csv = df_tab.to_csv(index=False).encode('utf-8')
-        colcsv, colpdf = st.columns([1,1])
-        with colcsv:
-            st.download_button(
-                "⬇️ Descargar CSV",
-                data=csv,
-                file_name=f"aforadores_{'dia' if modo=='Día' else 'semana'}_{pd.Timestamp(fecha_sel).strftime('%Y%m%d')}.csv",
-                mime="text/csv"
-            )
-        with colpdf:
-            try:
-                pdf_bytes = generar_pdf_reporte_datos(df_tab, modo, inicio, fin)
+            with col_xls:
                 st.download_button(
-                    "⬇️ Descargar PDF",
-                    data=pdf_bytes,
-                    file_name=f"reporte_{'dia' if modo=='Día' else 'semana'}_{pd.Timestamp(fecha_sel).strftime('%Y%m%d')}.pdf",
+                    "⬇️ Descargar XLS",
+                    data=buf,
+                    file_name=f"resumen_anual_{año_sel}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+
+            with col_pdf:
+                st.download_button(
+                    "⬇️ Descargar PDF anual",
+                    data=pdf,
+                    file_name=f"resumen_anual_{año_sel}.pdf",
                     mime="application/pdf"
                 )
-            except Exception as e:
-                st.warning("No se pudo generar el PDF. Avisame si persiste y lo vemos.")
-    else:
-        st.dataframe(
-            df_tab,
-            hide_index=True,
-            use_container_width=True
-        )
-
+            
+            
 
 # ===================
 # TAB: ANÁLISIS (UNIFICADO - VERSIÓN CORREGIDA)
