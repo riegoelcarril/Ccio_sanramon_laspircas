@@ -487,7 +487,7 @@ def cargar_datos_kobo():
             df_m['id_aforador'] = df_m.iloc[:, 0].astype(str).str.strip()
 
         df_m['Tipo'] = df_m['Tipo'].astype(str).str.strip() if 'Tipo' in df_m.columns else 'N/D'
-        mapa_tipo = {'a50x210': 'Aforador Flume 50x210 cm', 'a20x90':  'Aforador Flume 20x90 cm'}
+        mapa_tipo = {'a50x210': 'Aforador Flume 50x210 cm', 'a20x90':  'Aforador Flume 20x90 cm', 'a100x270':  'Aforador Flume 100x70 cm'}
         df_m['Tipo_fmt'] = df_m['Tipo'].map(mapa_tipo).fillna(df_m['Tipo'])
 
         def ext_coords(v):
