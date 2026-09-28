@@ -7,5 +7,5 @@ streamlit-folium
 altair
 pyarrow
 reportlab
-Pillow
+pillow
 openpyxl
